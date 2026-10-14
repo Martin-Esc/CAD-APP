@@ -1,0 +1,24 @@
+{
+  "name": "dental-cad",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser-based dental CAD: crowns & bridges, abutments, dentures, nightguards, diagnostic wax-ups",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  }
+}

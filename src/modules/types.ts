@@ -1,0 +1,25 @@
+import type { Viewport, SceneObject } from '../viewer/Viewport';
+import type { CaseState } from '../core/case';
+import type { ArchDefinition } from '../core/arch';
+import type { Jaw } from '../core/teeth';
+
+export interface AppContext {
+  viewport: Viewport;
+  state: CaseState;
+  /** fitted arch for the jaw, or the default arch form */
+  arch(jaw: Jaw): ArchDefinition;
+  /** the scan object loaded for a jaw, if any */
+  scanFor(jaw: Jaw): SceneObject | undefined;
+  status(message: string, kind?: 'info' | 'warn' | 'error'): void;
+  /** export the given objects as one STL */
+  exportObjects(objects: SceneObject[], name: string): void;
+}
+
+export interface DesignModule {
+  id: string;
+  title: string;
+  /** build the parameter panel */
+  render(ctx: AppContext): HTMLElement;
+  /** called while the user drags one of this module's objects */
+  onTransform?(ctx: AppContext, object: SceneObject): void;
+}
