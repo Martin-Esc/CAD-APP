@@ -89,6 +89,53 @@ export class MeshBuilder {
     return this;
   }
 
+  /** Area-weighted vertex normals of an indexed mesh. */
+  vertexNormals(): Float32Array {
+    const p = this.positions;
+    const n = new Float32Array(p.length);
+    for (let i = 0; i < this.indices.length; i += 3) {
+      const a = this.indices[i] * 3;
+      const b = this.indices[i + 1] * 3;
+      const c = this.indices[i + 2] * 3;
+      const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+      const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+      // cross product length = 2 · area, so this weights by area
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      for (const k of [a, b, c]) {
+        n[k] += nx;
+        n[k + 1] += ny;
+        n[k + 2] += nz;
+      }
+    }
+    for (let i = 0; i < n.length; i += 3) {
+      const len = Math.hypot(n[i], n[i + 1], n[i + 2]) || 1;
+      n[i] /= len;
+      n[i + 1] /= len;
+      n[i + 2] /= len;
+    }
+    return n;
+  }
+
+  /**
+   * Copy grown (d > 0) or shrunk (d < 0) along the vertex normals. Accurate for
+   * offsets that are small relative to the surface curvature, such as fit
+   * tolerances and cement gaps (≤ ~0.3 mm on teeth).
+   */
+  offset(d: number): MeshBuilder {
+    const normals = this.vertexNormals();
+    const out = new MeshBuilder();
+    for (let i = 0; i < this.positions.length; i++) out.positions.push(this.positions[i] + normals[i] * d);
+    out.indices.push(...this.indices);
+    return out;
+  }
+
+  clone(): MeshBuilder {
+    const out = new MeshBuilder();
+    out.positions.push(...this.positions);
+    out.indices.push(...this.indices);
+    return out;
+  }
+
   flipWinding(): this {
     for (let i = 0; i < this.indices.length; i += 3) {
       const t = this.indices[i + 1];
@@ -118,6 +165,16 @@ export class MeshBuilder {
   ensureOutward(): this {
     if (this.signedVolume() < 0) this.flipWinding();
     return this;
+  }
+
+  static fromGeometry(g: THREE.BufferGeometry): MeshBuilder {
+    const mb = new MeshBuilder();
+    const pos = g.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) mb.addVertex(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const index = g.getIndex();
+    if (index) for (let i = 0; i < index.count; i++) mb.indices.push(index.getX(i));
+    else for (let i = 0; i < pos.count; i++) mb.indices.push(i);
+    return mb;
   }
 
   toGeometry(): THREE.BufferGeometry {

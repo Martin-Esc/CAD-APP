@@ -1,3 +1,4 @@
+import type * as THREE from 'three';
 import type { Viewport, SceneObject } from '../viewer/Viewport';
 import type { CaseState } from '../core/case';
 import type { ArchDefinition } from '../core/arch';
@@ -13,6 +14,8 @@ export interface AppContext {
   status(message: string, kind?: 'info' | 'warn' | 'error'): void;
   /** export the given objects as one STL */
   exportObjects(objects: SceneObject[], name: string): void;
+  /** export world-space geometries (e.g. boolean results) as one STL */
+  exportGeometries(geometries: THREE.BufferGeometry[], name: string): void;
 }
 
 export interface DesignModule {

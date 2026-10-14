@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "manifold-3d": "^3.5.4",
     "three": "^0.186.1"
   },
   "devDependencies": {

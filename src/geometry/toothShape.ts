@@ -221,6 +221,37 @@ export class ToothSurface {
     return new THREE.Vector3(ax * u, by * v, this.wallHeight + this.relief(u, v));
   }
 
+  /** Radius of the superellipse cross-section (unit semi-axes) in polar direction alpha. */
+  private polarUnit(alpha: number, a: number, b: number): number {
+    const n = this.profile.exponent;
+    return 1 / Math.pow(Math.pow(Math.abs(Math.cos(alpha) / a), n) + Math.pow(Math.abs(Math.sin(alpha) / b), n), 1 / n);
+  }
+
+  /**
+   * Wall point in polar direction alpha (a true geometric angle, unlike
+   * wallPoint's superellipse parameter). Used to wrap the library tooth onto
+   * a scanned margin sampled at regular angles.
+   */
+  wallPointAt(alpha: number, t: number): THREE.Vector3 {
+    const [ax, by] = this.semiAxes(t);
+    const [a1, b1] = this.semiAxes(1);
+    const rho = this.polarUnit(alpha, ax, by);
+    const rimRho = this.polarUnit(alpha, a1, b1);
+    const u = (rimRho * Math.cos(alpha)) / a1;
+    const v = (rimRho * Math.sin(alpha)) / b1;
+    const topZ = this.wallHeight + this.relief(u, v);
+    return new THREE.Vector3(rho * Math.cos(alpha), rho * Math.sin(alpha), t * topZ);
+  }
+
+  /** Occlusal point in polar direction alpha at relative radius r (1 = rim). */
+  capPointAt(alpha: number, r: number): THREE.Vector3 {
+    const [a1, b1] = this.semiAxes(1);
+    const rho = this.polarUnit(alpha, a1, b1) * r;
+    const x = rho * Math.cos(alpha);
+    const y = rho * Math.sin(alpha);
+    return new THREE.Vector3(x, y, this.wallHeight + this.relief(x / a1, y / b1));
+  }
+
   /** Outer surface as rings from the margin to the occlusal centre. */
   outerRings(segments = SEGMENTS): { rings: THREE.Vector3[][]; center: THREE.Vector3 } {
     const rings: THREE.Vector3[][] = [];
@@ -354,6 +385,26 @@ function addDome(mb: MeshBuilder, marginIds: number[], margin: THREE.Vector3[], 
     prev = ids;
   }
   mb.fan(mb.addPoint(dome.center), prev, true);
+}
+
+/**
+ * Closed solid filling the crown's intaglio (cement space included),
+ * extended below the margin. Subtracting it after a bridge union keeps the
+ * intaglio clear of connector material.
+ */
+export function buildCrownCavity(shape: ToothShape, prep: PrepParams = DEFAULT_PREP, below = 3): MeshBuilder {
+  const surface = new ToothSurface(shape);
+  const mb = new MeshBuilder();
+  const p = prepRings(surface, prep, prep.cementGap);
+  const ids = p.rings.map((r) => mb.addRing(r));
+  for (let k = 0; k < ids.length - 1; k++) mb.stitchRings(ids[k], ids[k + 1]);
+  mb.fan(mb.addPoint(p.center), ids[ids.length - 1]);
+  const bottom = mb.addRing(p.rings[0].map((v) => new THREE.Vector3(v.x, v.y, -below)));
+  mb.stitchRings(bottom, ids[0]);
+  mb.fan(mb.addVertex(0, 0, -below), bottom, true);
+  // 20 µm inside the intaglio: it must clear connector material without ever
+  // touching the crown surface (touching faces leave slivers in the STL)
+  return mb.ensureOutward().offset(-0.02);
 }
 
 /** Full-contour crown shell with an intaglio fitted to a parametric prep. */

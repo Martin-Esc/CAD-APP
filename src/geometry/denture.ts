@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MeshBuilder } from './MeshBuilder';
+import { subtract, union } from './csg';
 import { sweepAlongArch, palateSlab } from './sweep';
 import { buildSolidTooth, buildPrepStump, shapeFromTooth, DEFAULT_PREP, type PrepParams } from './toothShape';
 import { archCurve, placeTeeth, type ArchDefinition } from '../core/arch';
@@ -18,6 +19,12 @@ export interface DentureParams {
   toothScale: number;
   /** set second molars (7s) */
   includeSecondMolars: boolean;
+  /** two-piece: teeth printed / milled separately and bonded into sockets in the base */
+  twoPiece: boolean;
+  /** how far each tooth extends below its cervical line into the base (mm) */
+  socketDepth: number;
+  /** clearance between tooth and socket wall for material / printer tolerance (mm) */
+  tolerance: number;
 }
 
 export const DEFAULT_DENTURE: DentureParams = {
@@ -27,7 +34,26 @@ export const DEFAULT_DENTURE: DentureParams = {
   palateThickness: 2.2,
   toothScale: 1,
   includeSecondMolars: true,
+  twoPiece: false,
+  socketDepth: 2.0,
+  tolerance: 0.1,
 };
+
+/** Tissue-side crest of the base profile (mm below the cervical line). */
+const BASE_CREST_DEPTH = 3.6;
+/** Base material that must remain under a socket (mm). */
+const MIN_BASE_UNDER_SOCKET = 1.0;
+
+export function validateDenture(p: DentureParams): string[] {
+  const issues: string[] = [];
+  if (p.twoPiece && p.socketDepth + p.tolerance > BASE_CREST_DEPTH - MIN_BASE_UNDER_SOCKET) {
+    issues.push(
+      `Sockets ${(p.socketDepth + p.tolerance).toFixed(1)} mm deep leave less than ${MIN_BASE_UNDER_SOCKET} mm of base over the ridge – reduce the socket depth.`,
+    );
+  }
+  if (p.twoPiece && p.tolerance > 0.4) issues.push('Tolerance above 0.4 mm – the teeth will be loose in their sockets.');
+  return issues;
+}
 
 export interface PlacedPart {
   fdi: number;
@@ -35,23 +61,6 @@ export interface PlacedPart {
   mesh: MeshBuilder;
   matrix: THREE.Matrix4;
   height: number;
-}
-
-function cylinder(radius: number, h0: number, h1: number, segments = 32): MeshBuilder {
-  const mb = new MeshBuilder();
-  const ring = (z: number) =>
-    mb.addRing(
-      Array.from({ length: segments }, (_, i) => {
-        const t = (i / segments) * Math.PI * 2;
-        return new THREE.Vector3(radius * Math.cos(t), radius * Math.sin(t), z);
-      }),
-    );
-  const a = ring(h0);
-  const b = ring(h1);
-  mb.stitchRings(a, b);
-  mb.fan(mb.addVertex(0, 0, h0), a, true);
-  mb.fan(mb.addVertex(0, 0, h1), b);
-  return mb;
 }
 
 /** Closed outline inside the arch at a given lingual offset/height (for palate slabs). */
@@ -75,7 +84,8 @@ function palatalRim(arch: ArchDefinition, lingualOffset: number, h: number): THR
   return pts;
 }
 
-export function buildDentureBase(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE): MeshBuilder {
+/** The base as separate closed shells (ridge sweep, palate), ready for booleans. */
+export function buildDentureBaseParts(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE): MeshBuilder[] {
   const D = p.flangeDepth;
   const L = arch.jaw === 'lower' ? p.lingualFlangeDepth : Math.min(p.lingualFlangeDepth, 6);
   const profile: [number, number][] = [
@@ -93,12 +103,35 @@ export function buildDentureBase(arch: ArchDefinition, p: DentureParams = DEFAUL
     [-5.2, -1.5],
     [-3.6, 1.2],
   ];
-  const base = sweepAlongArch(arch, () => profile, { extend: 4 });
+  const parts = [sweepAlongArch(arch, () => profile, { extend: 4 })];
   if (arch.jaw === 'upper' && p.palate) {
     const rim = palatalRim(arch, 4.6, -3);
-    base.append(palateSlab(arch, rim, 7, p.palateThickness));
+    parts.push(palateSlab(arch, rim, 7, p.palateThickness));
   }
-  return base;
+  return parts;
+}
+
+/** The base as one mesh of overlapping shells (fast preview, no booleans). */
+export function buildDentureBase(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE): MeshBuilder {
+  const parts = buildDentureBaseParts(arch, p);
+  for (const extra of parts.slice(1)) parts[0].append(extra);
+  return parts[0];
+}
+
+/**
+ * Two-piece base: the base solid with a socket for every tooth. Each socket is
+ * the tooth grown by `tolerance` along its normals, so the printed tooth
+ * slides in with an even cement / bonding gap.
+ *
+ * @param teeth  denture teeth in world space
+ */
+export function buildSocketedBase(baseParts: MeshBuilder[], teeth: MeshBuilder[], tolerance: number): Promise<MeshBuilder> {
+  return subtract(baseParts, teeth.map((t) => t.offset(tolerance)));
+}
+
+/** One-piece denture: base and teeth fused into a single solid. */
+export function buildMergedDenture(baseParts: MeshBuilder[], teeth: MeshBuilder[]): Promise<MeshBuilder> {
+  return union([...baseParts, ...teeth]);
 }
 
 export function buildDentureTeeth(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE): PlacedPart[] {
@@ -109,7 +142,7 @@ export function buildDentureTeeth(arch: ArchDefinition, p: DentureParams = DEFAU
     if (pos === 8 || (pos === 7 && !p.includeSecondMolars)) continue;
     const info = getTooth(fdi);
     const shape = shapeFromTooth(info, p.toothScale);
-    parts.push({ fdi, mesh: buildSolidTooth(shape, 2.5), matrix: placements.get(fdi)!.matrix.clone(), height: shape.height });
+    parts.push({ fdi, mesh: buildSolidTooth(shape, p.socketDepth), matrix: placements.get(fdi)!.matrix.clone(), height: shape.height });
   }
   return parts;
 }
@@ -119,8 +152,6 @@ export interface ModelOptions {
   preps?: number[];
   /** missing teeth (edentulous span / pontic sites) */
   missing?: number[];
-  /** implant sites (shown with a scan body) */
-  implants?: number[];
   prep?: PrepParams;
 }
 
@@ -132,7 +163,6 @@ export interface ModelOptions {
 export function buildDemoModel(arch: ArchDefinition, opts: ModelOptions = {}): MeshBuilder {
   const preps = new Set(opts.preps ?? []);
   const missing = new Set(opts.missing ?? []);
-  const implants = new Set(opts.implants ?? []);
   // gingiva rolling over the alveolar ridge, on a trimmed model base
   const gum: [number, number][] = [
     [4.0, 1.0],
@@ -148,18 +178,34 @@ export function buildDemoModel(arch: ArchDefinition, opts: ModelOptions = {}): M
     [-5.0, -0.6],
     [-4.0, 1.0],
   ];
-  const model = sweepAlongArch(arch, () => gum, { extend: 4 });
+  const placements = placeTeeth(arch);
+  // Trim the gingiva around prepared teeth (like a ditched die) so their
+  // margins are exposed and can be detected.
+  const length = archCurve(arch).getLength();
+  const trims = [...preps]
+    .filter((fdi) => placements.has(fdi))
+    .map((fdi) => ({ u: placements.get(fdi)!.u, half: getTooth(fdi).mesiodistal / 2 / length }));
+  const trimAt = (u: number) =>
+    trims.reduce((w, t) => {
+      const d = Math.abs(u - t.u);
+      const inner = t.half * 1.05;
+      const outer = t.half * 1.9;
+      return Math.max(w, d <= inner ? 1 : d >= outer ? 0 : 1 - (d - inner) / (outer - inner));
+    }, 0);
+  const drop = [2.6, 2.2, 1.0, 0, 0, 0, 0, 0, 0, 1.0, 2.2, 2.6];
+  const model = sweepAlongArch(arch, (u) => {
+    const w = trimAt(u);
+    return gum.map(([n, h], i) => [n, h - drop[i] * w] as [number, number]);
+  }, { extend: 4, samples: 160 });
   if (arch.jaw === 'upper') {
     model.append(palateSlab(arch, palatalRim(arch, 5.0, -2.5), 7, 5));
   }
-  const placements = placeTeeth(arch);
   for (const fdi of archOrder(arch.jaw)) {
     if (fdi % 10 === 8 || missing.has(fdi)) continue;
     const m = placements.get(fdi)!.matrix;
     const shape = shapeFromTooth(getTooth(fdi));
     let part: MeshBuilder;
-    if (implants.has(fdi)) part = cylinder(2.4, -1.5, 7);
-    else if (preps.has(fdi)) part = buildPrepStump(shape, opts.prep ?? DEFAULT_PREP, 4);
+    if (preps.has(fdi)) part = buildPrepStump(shape, opts.prep ?? DEFAULT_PREP, 4);
     else part = buildSolidTooth(shape, 4);
     model.append(part.transform(m));
   }

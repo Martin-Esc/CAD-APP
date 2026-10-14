@@ -26,6 +26,8 @@ export interface ToothPlacement {
   /** local tooth frame -> world */
   matrix: THREE.Matrix4;
   center: THREE.Vector3;
+  /** arc-length parameter of the tooth centre on the arch curve (0..1) */
+  u: number;
   tangent: THREE.Vector3;
   buccal: THREE.Vector3;
 }
@@ -106,7 +108,7 @@ export function placeTeeth(arch: ArchDefinition, widthScale = 1): Map<number, To
     if (new THREE.Vector3().crossVectors(xAxis, buccal).dot(up) < 0) xAxis.negate();
     const center = new THREE.Vector3(p.x, p.y, arch.marginZ);
     const matrix = new THREE.Matrix4().makeBasis(xAxis, buccal, up).setPosition(center);
-    result.set(fdi, { fdi, matrix, center, tangent, buccal });
+    result.set(fdi, { fdi, matrix, center, u, tangent, buccal });
   };
 
   const mid = order.length / 2;

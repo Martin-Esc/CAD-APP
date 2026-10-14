@@ -19,13 +19,12 @@ export function loadDemoModels(ctx: AppContext): void {
     const model = buildDemoModel(ctx.arch(jaw), {
       preps: teethWithRole(s, 'crown'),
       missing: teethWithRole(s, 'pontic', 'missing'),
-      implants: teethWithRole(s, 'abutment'),
       prep: s.params.prep,
     });
     addScan(ctx, jaw, `Demo model (${jaw})`, model.toGeometry());
   }
   ctx.viewport.view('front');
-  ctx.status('Demo models generated from the tooth chart (crowns → preps, pontics → missing, abutments → scan bodies).');
+  ctx.status('Demo models generated from the tooth chart (crowns → preps, pontics → missing).');
 }
 
 function showArch(ctx: AppContext, jaw: Jaw): void {

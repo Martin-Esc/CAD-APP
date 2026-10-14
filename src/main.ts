@@ -1,4 +1,5 @@
 import './styles.css';
+import * as THREE from 'three';
 import { Viewport, type SceneObject } from './viewer/Viewport';
 import { defaultArch } from './core/arch';
 import { newCase, serializeCase, deserializeCase, type CaseState } from './core/case';
@@ -11,12 +12,11 @@ import { sceneList } from './ui/sceneList';
 import type { AppContext, DesignModule } from './modules/types';
 import { casePanel, loadDemoModels } from './modules/casePanel';
 import { crownBridgeModule } from './modules/crownBridge';
-import { abutmentModule } from './modules/abutment';
 import { dentureModule } from './modules/denture';
 import { nightguardModule } from './modules/nightguard';
 import { waxupModule } from './modules/waxup';
 
-const MODULES: DesignModule[] = [casePanel, crownBridgeModule, abutmentModule, dentureModule, nightguardModule, waxupModule];
+const MODULES: DesignModule[] = [casePanel, crownBridgeModule, dentureModule, nightguardModule, waxupModule];
 
 class App {
   private state: CaseState = newCase();
@@ -56,6 +56,10 @@ class App {
       scanFor: (jaw: Jaw) => this.viewport.list().find((o) => o.category === 'scan' && o.data.jaw === jaw),
       status: (msg, kind = 'info') => this.status(msg, kind),
       exportObjects: (objs, name) => this.exportObjects(objs, name),
+      exportGeometries: (geoms, name) => {
+        download(exportStl(geoms.map((g) => new THREE.Mesh(g))), `${this.state.info.caseId}_${name}.stl`);
+        this.status(`Exported ${name}.stl`);
+      },
     };
 
     this.viewport.onTransform((o) => MODULES.find((m) => m.id === o.module)?.onTransform?.(this.ctx, o));
@@ -124,6 +128,9 @@ class App {
             type: 'button',
             class: m.id === this.activeTab ? 'active' : '',
             onclick: () => {
+              // leave any pick mode (margin drawing, arch picking) of the previous tab
+              this.viewport.pickHandler = null;
+              this.viewport.pickFilter = null;
               this.activeTab = m.id;
               this.renderTabs();
             },
@@ -134,6 +141,10 @@ class App {
     );
     const module = MODULES.find((m) => m.id === this.activeTab)!;
     this.panelHost.replaceChildren(module.render(this.ctx));
+    // margin lines are only shown while working in Crown & Bridge
+    for (const o of this.viewport.list()) {
+      if (o.category === 'helper' && o.data.marginOf !== undefined) o.mesh.visible = this.activeTab === 'crown-bridge';
+    }
   }
 
   private renderSelection(o: SceneObject | null): void {

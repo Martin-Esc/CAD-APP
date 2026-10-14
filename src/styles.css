@@ -11,7 +11,6 @@
   --ok: #4fd18b;
   --crown: #e9e4d6;
   --pontic: #9fb7ff;
-  --abutment: #b8bcc4;
   --waxup: #e8c66a;
   --missing: #4a5466;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -142,7 +141,6 @@ main { display: grid; grid-template-columns: 340px 1fr 260px; min-height: 0; }
 .tooth:hover { border-color: var(--accent); }
 .role-crown { background: var(--crown) !important; color: #222 !important; }
 .role-pontic { background: var(--pontic) !important; color: #111 !important; }
-.role-abutment { background: var(--abutment) !important; color: #111 !important; }
 .role-waxup { background: var(--waxup) !important; color: #111 !important; }
 .role-missing { background: var(--missing) !important; color: var(--muted) !important; text-decoration: line-through; }
 .brushes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }

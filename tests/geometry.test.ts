@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { checkMesh } from '../src/geometry/MeshBuilder';
 import { buildCrownShell, buildSolidTooth, buildPrepStump, shapeFromTooth, DEFAULT_PREP } from '../src/geometry/toothShape';
-import { buildAbutment, DEFAULT_ABUTMENT, validateAbutment } from '../src/geometry/abutment';
 import { buildConnector } from '../src/geometry/connector';
 import { buildDentureBase, buildDentureTeeth, buildDemoModel } from '../src/geometry/denture';
 import { buildNightguard } from '../src/geometry/nightguard';
@@ -43,25 +42,6 @@ describe('tooth library', () => {
     expect(checkMesh(stump).watertight).toBe(true);
     // crown intaglio top sits cementGap above the prep top
     expect(crown.boundingBox!.max.z).toBeGreaterThan(stump.boundingBox!.max.z + DEFAULT_PREP.occlusalThickness * 0.8);
-  });
-});
-
-describe('abutment', () => {
-  it('default abutment is watertight and valid', () => {
-    const c = checkMesh(buildAbutment().toGeometry());
-    expect(c.watertight).toBe(true);
-    expect(c.volume).toBeGreaterThan(20);
-    expect(validateAbutment(DEFAULT_ABUTMENT)).toEqual([]);
-  });
-
-  it('angulated abutment stays watertight', () => {
-    const c = checkMesh(buildAbutment({ ...DEFAULT_ABUTMENT, angulation: 15 }).toGeometry());
-    expect(c.watertight).toBe(true);
-    expect(c.volume).toBeGreaterThan(0);
-  });
-
-  it('flags a hex larger than the platform', () => {
-    expect(validateAbutment({ ...DEFAULT_ABUTMENT, hexAcrossFlats: 4 })).not.toEqual([]);
   });
 });
 

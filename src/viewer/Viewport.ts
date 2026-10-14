@@ -8,7 +8,7 @@ export interface SceneObject {
   id: string;
   name: string;
   category: ObjectCategory;
-  /** module that owns the object (crown-bridge, abutment, …) */
+  /** module that owns the object (crown-bridge, denture, …) */
   module?: string;
   mesh: THREE.Mesh;
   /** design objects the user may move with the gizmo */
@@ -56,6 +56,8 @@ export class Viewport {
   private transformListeners = new Set<(o: SceneObject) => void>();
   /** when set, clicks are delivered here instead of selecting */
   pickHandler: ((point: THREE.Vector3, object: SceneObject) => void) | null = null;
+  /** restricts which objects the pick handler can hit (e.g. scans only) */
+  pickFilter: ((object: SceneObject) => boolean) | null = null;
 
   constructor(private readonly container: HTMLElement) {
     THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -139,7 +141,8 @@ export class Viewport {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const meshes = [...this.objects.values()].filter((o) => o.mesh.visible && o.category !== 'helper').map((o) => o.mesh);
+    const filter = this.pickHandler && this.pickFilter ? this.pickFilter : () => true;
+    const meshes = [...this.objects.values()].filter((o) => o.mesh.visible && o.category !== 'helper' && filter(o)).map((o) => o.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     for (const h of hits) {
       if (this.renderer.clippingPlanes.length && this.section.distanceToPoint(h.point) < 0) continue;
