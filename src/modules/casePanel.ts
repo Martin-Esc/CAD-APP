@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { AppContext, DesignModule } from './types';
 import { MATERIALS } from '../viewer/Viewport';
-import type { Jaw } from '../core/teeth';
+import { archOrder, type Jaw } from '../core/teeth';
+import { mergeParts, prepareTeeth, solidParts } from '../library/provider';
 import { archCurve, archFromPicks } from '../core/arch';
 import { teethWithRole } from '../core/case';
 import { buildDemoModel } from '../geometry/denture';
@@ -13,13 +14,15 @@ function addScan(ctx: AppContext, jaw: Jaw, name: string, geometry: THREE.Buffer
   ctx.viewport.add(name, geometry, MATERIALS.scan(), { category: 'scan', editable: false, data: { jaw } });
 }
 
-export function loadDemoModels(ctx: AppContext): void {
+export async function loadDemoModels(ctx: AppContext): Promise<void> {
   const s = ctx.state;
+  await prepareTeeth([...archOrder('upper'), ...archOrder('lower')]);
   for (const jaw of ['upper', 'lower'] as Jaw[]) {
     const model = buildDemoModel(ctx.arch(jaw), {
       preps: teethWithRole(s, 'crown'),
       missing: teethWithRole(s, 'pontic', 'missing'),
       prep: s.params.prep,
+      solid: (fdi, scale, depth) => mergeParts(solidParts(fdi, scale, depth)),
     });
     addScan(ctx, jaw, `Demo model (${jaw})`, model.toGeometry());
   }
@@ -34,6 +37,22 @@ function showArch(ctx: AppContext, jaw: Jaw): void {
   const pts = curve.getSpacedPoints(80).map((p) => p.setZ(arch.marginZ));
   const tube = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 160, 0.25, 6, false);
   ctx.viewport.add(`Arch (${jaw})`, tube, MATERIALS.helper(), { category: 'helper', editable: false, data: { arch: jaw } });
+}
+
+function libraryBox(ctx: AppContext): HTMLElement {
+  const lib = ctx.library();
+  if (!lib) {
+    return section('Tooth library', note('No scanned tooth library found (public/library/teeth). Using procedural teeth. Build one with "npm run build:library -- <folder of STLs>".', 'warn'));
+  }
+  const p = ctx.state.params;
+  return section(
+    'Tooth library',
+    selectField('Tooth shapes', p, 'toothLibrary', [['scanned', `Scanned library (${lib.manifest.teeth.length} teeth)`], ['procedural', 'Procedural (parametric)']], () => {
+      ctx.setToothLibrary(p.toothLibrary);
+      ctx.status(`Using ${p.toothLibrary === 'scanned' ? 'the scanned tooth library' : 'procedural teeth'}. Reload the demo models and press Generate to update designs.`);
+    }),
+    ...lib.manifest.notes.map((n) => note(n)),
+  );
 }
 
 export const casePanel: DesignModule = {
@@ -108,6 +127,7 @@ export const casePanel: DesignModule = {
         textField('Material', info, 'material'),
         textField('Notes', info, 'notes', true),
       ),
+      libraryBox(ctx),
       section(
         'Scans',
         el(
@@ -115,7 +135,7 @@ export const casePanel: DesignModule = {
           { class: 'actions' },
           button('Import upper', () => importScan('upper')),
           button('Import lower', () => importScan('lower')),
-          button('Demo models', () => loadDemoModels(ctx), 'primary'),
+          button('Demo models', () => void loadDemoModels(ctx), 'primary'),
           button('Unlock / lock scans', toggleScanEditing),
         ),
         note('STL, PLY or OBJ in millimetres. Align the occlusal plane with the grid (Z up, incisors toward +Y) so the arch tools and the nightguard work as expected.'),

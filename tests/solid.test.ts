@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { closedAfterStl } from './stl';
 import { checkMesh, MeshBuilder } from '../src/geometry/MeshBuilder';
 import { union, subtract } from '../src/geometry/csg';
 import { buildCrownShell, buildCrownCavity, buildSolidTooth, shapeFromTooth, DEFAULT_PREP } from '../src/geometry/toothShape';
@@ -21,13 +21,6 @@ import { getTooth } from '../src/core/teeth';
 
 function closed(mb: MeshBuilder) {
   return checkMesh(mb.toGeometry());
-}
-
-/** Topology after an STL round trip: float32 coordinates, welded at 10 µm. */
-function closedAfterStl(mb: MeshBuilder) {
-  const g = mb.toGeometry().toNonIndexed();
-  g.deleteAttribute('normal');
-  return checkMesh(mergeVertices(g, 1e-5));
 }
 
 /** Count connected shells via union-find over shared vertices. */

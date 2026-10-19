@@ -37,6 +37,8 @@ export interface CaseState {
   params: {
     /** build crowns on the scanned die when a margin line exists */
     fitToDie: boolean;
+    /** tooth shapes: the scanned library (when available) or procedural teeth */
+    toothLibrary: 'scanned' | 'procedural';
     prep: PrepParams;
     connector: ConnectorParams;
     anatomyScale: number;
@@ -63,6 +65,7 @@ export function newCase(): CaseState {
     margins: {},
     params: {
       fitToDie: true,
+      toothLibrary: 'scanned',
       prep: { ...DEFAULT_PREP },
       connector: { ...DEFAULT_CONNECTOR },
       anatomyScale: 1,
@@ -111,6 +114,7 @@ export function deserializeCase(json: string): CaseState {
     margins: raw.margins ?? {},
     params: {
       fitToDie: raw.params?.fitToDie ?? true,
+      toothLibrary: raw.params?.toothLibrary === 'procedural' ? 'procedural' : 'scanned',
       prep: { ...base.params.prep, ...raw.params?.prep },
       connector: { ...base.params.connector, ...raw.params?.connector },
       anatomyScale: raw.params?.anatomyScale ?? 1,

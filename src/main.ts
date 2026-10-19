@@ -2,6 +2,8 @@ import './styles.css';
 import * as THREE from 'three';
 import { Viewport, type SceneObject } from './viewer/Viewport';
 import { defaultArch } from './core/arch';
+import { ToothLibrary } from './library/toothLibrary';
+import { setActiveLibrary } from './library/provider';
 import { newCase, serializeCase, deserializeCase, type CaseState } from './core/case';
 import type { Jaw } from './core/teeth';
 import { checkMesh } from './geometry/MeshBuilder';
@@ -56,6 +58,11 @@ class App {
       scanFor: (jaw: Jaw) => this.viewport.list().find((o) => o.category === 'scan' && o.data.jaw === jaw),
       status: (msg, kind = 'info') => this.status(msg, kind),
       exportObjects: (objs, name) => this.exportObjects(objs, name),
+      library: () => this.library,
+      setToothLibrary: (mode) => {
+        this.state.params.toothLibrary = mode;
+        this.applyLibrary();
+      },
       exportGeometries: (geoms, name) => {
         download(exportStl(geoms.map((g) => new THREE.Mesh(g))), `${this.state.info.caseId}_${name}.stl`);
         this.status(`Exported ${name}.stl`);
@@ -66,7 +73,31 @@ class App {
     this.viewport.onSelect((o) => this.renderSelection(o));
     this.bindKeys();
     this.renderAll();
-    loadDemoModels(this.ctx);
+    void this.start();
+  }
+
+  private library: ToothLibrary | null = null;
+
+  /** Activate the scanned library when it is loaded and the case asks for it (never changes the case's choice). */
+  private applyLibrary(): void {
+    setActiveLibrary(this.library && this.state.params.toothLibrary === 'scanned' ? this.library : null);
+  }
+
+  /** Load the scanned tooth library (if present), then build the demo models. */
+  private async start(): Promise<void> {
+    this.status('Loading tooth library…');
+    try {
+      this.library = await ToothLibrary.load(async (path) => {
+        const res = await fetch(`${import.meta.env.BASE_URL}library/teeth/${path}`);
+        if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+        return res.arrayBuffer();
+      });
+    } catch {
+      this.library = null;
+    }
+    this.applyLibrary();
+    this.renderTabs();
+    await loadDemoModels(this.ctx);
   }
 
   private buildHeader(): HTMLElement {
@@ -115,6 +146,8 @@ class App {
   }
 
   private renderAll(): void {
+    // a new or opened case may choose a different tooth library
+    this.applyLibrary();
     this.chartHost.replaceChildren(toothChart(this.state, () => {}));
     this.renderTabs();
   }

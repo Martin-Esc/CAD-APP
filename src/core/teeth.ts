@@ -79,6 +79,18 @@ const DIMENSIONS: Record<Jaw, [number, number, number][]> = {
   ],
 };
 
+/**
+ * Measured dimensions of the active tooth library. When a scanned library is
+ * loaded its real widths drive the arch layout, so library teeth sit side by
+ * side at their contacts instead of at textbook spacing.
+ */
+const overrides = new Map<number, [number, number, number]>();
+
+export function setToothDimensions(dims: Map<number, [mesiodistal: number, buccolingual: number, crownHeight: number]> | null): void {
+  overrides.clear();
+  if (dims) for (const [fdi, d] of dims) overrides.set(fdi, d);
+}
+
 function quadrantOf(fdi: number): number {
   return Math.floor(fdi / 10);
 }
@@ -116,7 +128,7 @@ export function getTooth(fdi: number): ToothInfo {
   const jaw: Jaw = q <= 2 ? 'upper' : 'lower';
   const side = q === 1 || q === 4 ? 'right' : 'left';
   const toothClass = CLASSES[position - 1];
-  const [mesiodistal, buccolingual, crownHeight] = DIMENSIONS[jaw][position - 1];
+  const [mesiodistal, buccolingual, crownHeight] = overrides.get(fdi) ?? DIMENSIONS[jaw][position - 1];
   return {
     fdi,
     universal: fdiToUniversal(fdi),

@@ -3,23 +3,23 @@ import { MATERIALS } from '../viewer/Viewport';
 import { getTooth, jawOf } from '../core/teeth';
 import { placeTeeth } from '../core/arch';
 import { teethWithRole } from '../core/case';
-import { buildSolidTooth, shapeFromTooth } from '../geometry/toothShape';
+import { mergeParts, prepareTeeth, solidParts } from '../library/provider';
 import { button, el, note, numberField, section } from '../ui/dom';
 
 const MODULE = 'waxup';
 
-function generate(ctx: AppContext): void {
+async function generate(ctx: AppContext): Promise<void> {
   const { state, viewport } = ctx;
-  viewport.removeWhere((o) => o.module === MODULE);
   const teeth = teethWithRole(state, 'waxup');
+  await prepareTeeth(teeth);
+  viewport.removeWhere((o) => o.module === MODULE);
   if (!teeth.length) {
     ctx.status('Mark teeth as "Wax-up" on the tooth chart first.', 'warn');
     return;
   }
   for (const fdi of teeth) {
     const placement = placeTeeth(ctx.arch(jawOf(fdi))).get(fdi)!;
-    const shape = shapeFromTooth(getTooth(fdi), state.params.waxupScale);
-    viewport.add(`Wax-up ${ctx.state.numbering === 'fdi' ? fdi : '#' + getTooth(fdi).universal}`, buildSolidTooth(shape, 1.5).toGeometry(), MATERIALS.waxup(), {
+    viewport.add(`Wax-up ${ctx.state.numbering === 'fdi' ? fdi : '#' + getTooth(fdi).universal}`, mergeParts(solidParts(fdi, state.params.waxupScale, 0)).toGeometry(), MATERIALS.waxup(), {
       category: 'design',
       module: MODULE,
       matrix: placement.matrix,
@@ -34,7 +34,7 @@ export const waxupModule: DesignModule = {
   title: 'Wax-up',
   render(ctx) {
     const regen = () => {
-      if (ctx.viewport.list().some((o) => o.module === MODULE)) generate(ctx);
+      if (ctx.viewport.list().some((o) => o.module === MODULE)) void generate(ctx);
     };
     return el(
       'div',
@@ -44,7 +44,7 @@ export const waxupModule: DesignModule = {
       el(
         'div',
         { class: 'actions' },
-        button('Generate', () => generate(ctx), 'primary'),
+        button('Generate', () => void generate(ctx), 'primary'),
         button('Export wax-up', () => ctx.exportObjects(ctx.viewport.list().filter((o) => o.module === MODULE), 'waxup')),
         button('Export with scan', () => {
           const wax = ctx.viewport.list().filter((o) => o.module === MODULE);

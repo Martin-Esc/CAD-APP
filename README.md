@@ -2,7 +2,7 @@
 
 Browser-based CAD for the dental lab: **crowns & bridges, complete dentures (one- or two-piece), nightguards and diagnostic wax-ups**. Written in TypeScript with Three.js and [manifold-3d](https://github.com/elalish/manifold) for solid booleans. No backend required.
 
-![Lower occlusal view: margins detected on three preps (green), crowns fitted to the dies, 34–36 bridge with pontic and connectors](docs/screenshot-crown-bridge.png)
+![Lower occlusal view with the scanned tooth library: crowns fitted to three scanned dies, 34–36 bridge with pontic and connectors](docs/screenshot-crown-bridge.png)
 
 > ⚠️ **Not a medical device.** This is an early-stage design tool. Anything it makes must be checked by a qualified dental professional before clinical use. Software that designs patient-specific restorations is a regulated medical device in most markets (FDA Class II in the US, EU MDR).
 
@@ -16,6 +16,20 @@ npm run build      # production build in dist/
 ```
 
 When the app opens it builds procedural **demo models**, so every workflow works without scan data. Import your own STL/PLY/OBJ scans from the **Case** tab.
+
+## Tooth library
+
+The app ships with a scanned anatomical tooth library: 32 closed crown meshes in `public/library/teeth/`. It is used for denture teeth, wax-ups, pontics, the outer surface of crowns (both die-fitted and on the parametric prep) and the natural teeth of the demo models. Its measured tooth widths also drive the arch layout. You can switch back to procedural teeth in the **Case** tab.
+
+The library is built from an arranged set-up, meaning all teeth in their positions in one coordinate system with one STL per tooth:
+
+```bash
+npm run build:library -- path/to/folder-with-stl-files
+```
+
+The build script works out the occlusal plane and both arches, numbers the teeth **by their position in the arch** rather than by file name, and moves each tooth into the app's tooth frame (x mesiodistal, y buccal, z occlusal, cervical line on z = 0). It also samples each crown's outer surface around its own long axis, which is what lets crowns be wrapped onto a margin. Exact duplicates are skipped, and anything unusual is reported in the manifest and in the Case tab. For the supplied library: `UNN31.stl` duplicates `UNN30.stl`, so `UNN32`/`UNN33` are #31/#32 (FDI 47/48).
+
+Library crowns end just below the cervical line. Where a tooth has to sit deeper (denture sockets, model gingiva), a root stub is added and fused to it.
 
 ## Workflow
 
@@ -55,6 +69,7 @@ src/
     sweep.ts         profile sweep along the arch, palate slab
     denture.ts       denture base/teeth, two-piece sockets, procedural demo models
     nightguard.ts    height-field splint generator
+  library/     scanned tooth library: analysis/build (analyze.ts), loading + outer surface (toothLibrary.ts), tooth provider for all modules (provider.ts)
   modules/     one file per workflow (UI panel + generate logic)
   viewer/      Three.js viewport (Z-up, orbit, gizmo, picking, section plane)
   io/          STL/PLY/OBJ import, STL export
@@ -65,7 +80,7 @@ Conventions: units are millimetres and the world is **Z-up**, with +Y anterior a
 
 ## Roadmap
 
-1. **Tooth library import.** Replace the procedural teeth with a scanned library (next step).
+1. **Library tools.** Pick between several libraries (shape and size variants), adapt library crowns to their neighbours and antagonist, and add sculpting tools.
 2. **Die workflow.** Per-tooth insertion axis with undercut block-out, a margin editor that drags points along the surface, and spacer zones (e.g. extra occlusal gap for milling).
 3. **Occlusion.** Contact detection and colour maps against the antagonist, a virtual articulator, and occlusal adjustment. Add sculpting tools (add/remove/smooth wax brushes).
 4. **Dentures.** Edentulous-scan outline drawing, tooth set-up rules (occlusal plane, compensating curves), gingival festoon sculpting, and a splinted teeth-arch option for two-piece.

@@ -150,10 +150,31 @@ function superDir(theta: number, n: number): [number, number] {
 }
 
 /**
+ * Outer crown surface in the local tooth frame (cervical line on z = 0),
+ * sampled by polar direction alpha around the long axis. Implemented by the
+ * procedural ToothSurface and by scanned library teeth (LibrarySurface), so
+ * crown construction works the same with either.
+ */
+export interface OuterSurface {
+  /** cross-section semi-axes (x, y) at normalised wall height t */
+  semiAxes(t: number): [number, number];
+  /** axial wall, t = 0 cervical line … 1 rim of the occlusal table */
+  wallPointAt(alpha: number, t: number): THREE.Vector3;
+  /** occlusal table, r = 1 rim … 0 centre */
+  capPointAt(alpha: number, r: number): THREE.Vector3;
+  /** centre of the occlusal table / incisal edge */
+  topPoint(): THREE.Vector3;
+  /** cervical line to the highest point */
+  readonly height: number;
+  /** copy scaled in x (mesiodistal) and y (buccolingual) */
+  scaled(sx: number, sy: number): OuterSurface;
+}
+
+/**
  * Evaluates the outer surface of a tooth crown. Exposed so that the crown
  * shell can make its intaglio respect the minimum wall thickness.
  */
-export class ToothSurface {
+export class ToothSurface implements OuterSurface {
   readonly profile: KindProfile;
   readonly a: number;
   readonly b: number;
@@ -250,6 +271,18 @@ export class ToothSurface {
     const x = rho * Math.cos(alpha);
     const y = rho * Math.sin(alpha);
     return new THREE.Vector3(x, y, this.wallHeight + this.relief(x / a1, y / b1));
+  }
+
+  get height(): number {
+    return this.shape.height;
+  }
+
+  topPoint(): THREE.Vector3 {
+    return new THREE.Vector3(0, 0, this.wallHeight + this.relief(0, 0));
+  }
+
+  scaled(sx: number, sy: number): ToothSurface {
+    return new ToothSurface({ ...this.shape, mesiodistal: this.shape.mesiodistal * sx, buccolingual: this.shape.buccolingual * sy });
   }
 
   /** Outer surface as rings from the margin to the occlusal centre. */

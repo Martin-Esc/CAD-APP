@@ -3,6 +3,7 @@ import type { Viewport, SceneObject } from '../viewer/Viewport';
 import type { CaseState } from '../core/case';
 import type { ArchDefinition } from '../core/arch';
 import type { Jaw } from '../core/teeth';
+import type { ToothLibrary } from '../library/toothLibrary';
 
 export interface AppContext {
   viewport: Viewport;
@@ -14,6 +15,10 @@ export interface AppContext {
   status(message: string, kind?: 'info' | 'warn' | 'error'): void;
   /** export the given objects as one STL */
   exportObjects(objects: SceneObject[], name: string): void;
+  /** the scanned tooth library, if it could be loaded */
+  library(): ToothLibrary | null;
+  /** switch between the scanned library and procedural teeth */
+  setToothLibrary(mode: 'scanned' | 'procedural'): void;
   /** export world-space geometries (e.g. boolean results) as one STL */
   exportGeometries(geometries: THREE.BufferGeometry[], name: string): void;
 }

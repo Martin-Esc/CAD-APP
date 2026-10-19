@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBuilder } from './MeshBuilder';
-import { ToothSurface, type PrepParams, type ToothShape } from './toothShape';
+import { ToothSurface, type OuterSurface, type PrepParams, type ToothShape } from './toothShape';
 import { extractRegion, resampleByAngle, MARGIN_SAMPLES } from './margin';
 
 /**
@@ -56,7 +56,8 @@ export function buildDieCrown(
   scan: THREE.BufferGeometry,
   margin: THREE.Vector3[],
   basis: THREE.Matrix4,
-  shape: ToothShape,
+  /** procedural tooth shape, or any outer surface (e.g. a scanned library tooth) */
+  outerSurface: ToothShape | OuterSurface,
   prep: PrepParams,
 ): DieCrownResult {
   const centroid = margin.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(margin.length);
@@ -133,11 +134,11 @@ export function buildDieCrown(
   // ---- outer surface ----------------------------------------------------
   const marginW = Math.max(...m.map((p) => p.x)) - Math.min(...m.map((p) => p.x));
   const marginB = Math.max(...m.map((p) => p.y)) - Math.min(...m.map((p) => p.y));
-  const base = new ToothSurface(shape);
+  const base: OuterSurface = 'kind' in outerSurface ? new ToothSurface(outerSurface) : outerSurface;
   const [a0, b0] = base.semiAxes(0);
   const sx = THREE.MathUtils.clamp((marginW / 2 + prep.marginThickness) / a0, 0.75, 1.35);
   const sy = THREE.MathUtils.clamp((marginB / 2 + prep.marginThickness) / b0, 0.75, 1.35);
-  const surface = new ToothSurface({ ...shape, mesiodistal: shape.mesiodistal * sx, buccolingual: shape.buccolingual * sy });
+  const surface = base.scaled(sx, sy);
   const lift = new THREE.Vector3(0, 0, zm);
 
   const outer: THREE.Vector3[][] = [];
@@ -159,7 +160,7 @@ export function buildDieCrown(
     const r = 1 - k / CAP_RINGS;
     outer.push(m.map((_, j) => surface.capPointAt((j / N) * Math.PI * 2, r).add(lift)));
   }
-  const outerCenter = new THREE.Vector3(0, 0, surface.wallHeight + surface.relief(0, 0)).add(lift);
+  const outerCenter = surface.topPoint().add(lift);
 
   // minimum thickness: push outer points away from the die along rays from O
   let minThickness = Infinity;
@@ -223,7 +224,7 @@ export function buildDieCrown(
     mesh: mb,
     cavity: cav,
     frame,
-    height: outerCenter.z - zm + surface.capHeight,
+    height: surface.height,
     minThickness: Number.isFinite(minThickness) ? minThickness : 0,
   };
 }

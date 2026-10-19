@@ -1,7 +1,8 @@
 import type { AppContext, DesignModule } from './types';
 import type { SceneObject } from '../viewer/Viewport';
 import { MATERIALS } from '../viewer/Viewport';
-import type { Jaw } from '../core/teeth';
+import { archOrder, type Jaw } from '../core/teeth';
+import { prepareTeeth, solidTooth } from '../library/provider';
 import { MeshBuilder } from '../geometry/MeshBuilder';
 import { worldGeometry } from '../geometry/csg';
 import {
@@ -42,13 +43,24 @@ async function cutSockets(ctx: AppContext, jaw: Jaw): Promise<void> {
   }
 }
 
-function generate(ctx: AppContext, issuesBox: HTMLElement): void {
+async function generate(ctx: AppContext, issuesBox: HTMLElement): Promise<void> {
   const { state, viewport } = ctx;
-  viewport.removeWhere((o) => o.module === MODULE);
   const p = state.params.denture;
   const issues = validateDenture(p);
   issuesBox.replaceChildren(...issues.map((i) => note(i, 'warn')));
   const jaws: Jaw[] = p.jaw === 'both' ? ['upper', 'lower'] : [p.jaw];
+  // each tooth as one solid that reaches `socketDepth` into the base
+  const fdis = jaws.flatMap((j) => archOrder(j)).filter((f) => f % 10 !== 8 && (f % 10 !== 7 || p.includeSecondMolars));
+  ctx.status('Preparing denture teeth…');
+  let solids: Map<number, MeshBuilder>;
+  try {
+    await prepareTeeth(fdis);
+    solids = new Map(await Promise.all(fdis.map(async (f) => [f, await solidTooth(f, p.toothScale, p.socketDepth)] as const)));
+  } catch (e) {
+    ctx.status(`Could not prepare the denture teeth: ${(e as Error).message}`, 'error');
+    return;
+  }
+  viewport.removeWhere((o) => o.module === MODULE);
   for (const jaw of jaws) {
     const arch = ctx.arch(jaw);
     const parts = buildDentureBaseParts(arch, p);
@@ -60,7 +72,7 @@ function generate(ctx: AppContext, issuesBox: HTMLElement): void {
       editable: false,
       data: { kind: 'base', jaw, parts },
     });
-    for (const t of buildDentureTeeth(arch, p)) {
+    for (const t of buildDentureTeeth(arch, p, (f) => solids.get(f)!.clone())) {
       viewport.add(`Denture tooth ${t.fdi}`, t.mesh.toGeometry(), MATERIALS.tooth(), {
         category: 'design',
         module: MODULE,
@@ -112,7 +124,7 @@ export const dentureModule: DesignModule = {
     const root = el('div', {});
     const issuesBox = el('div', {});
     const regen = () => {
-      if (ctx.viewport.list().some((o) => o.module === MODULE)) generate(ctx, issuesBox);
+      if (ctx.viewport.list().some((o) => o.module === MODULE)) void generate(ctx, issuesBox);
       else issuesBox.replaceChildren(...validateDenture(p).map((i) => note(i, 'warn')));
     };
     const build = () => {
@@ -151,7 +163,7 @@ export const dentureModule: DesignModule = {
         el(
           'div',
           { class: 'actions' },
-          button('Generate', () => generate(ctx, issuesBox), 'primary'),
+          button('Generate', () => void generate(ctx, issuesBox), 'primary'),
           ...(p.twoPiece
             ? [
                 button('Export base (sockets)', () => void exportBase(ctx)),

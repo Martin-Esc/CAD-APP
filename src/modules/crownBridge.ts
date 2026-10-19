@@ -5,7 +5,8 @@ import { MATERIALS } from '../viewer/Viewport';
 import { contiguousRuns, getTooth, jawOf } from '../core/teeth';
 import { placeTeeth } from '../core/arch';
 import { teethWithRole } from '../core/case';
-import { buildCrownShell, buildCrownCavity, buildSolidTooth, shapeFromTooth } from '../geometry/toothShape';
+import { buildCrownShell, buildCrownCavity, buildPrepStump, prepRings, shapeFromTooth, ToothSurface } from '../geometry/toothShape';
+import { activeLibrary, mergeParts, outerSurface, prepareTeeth, solidParts } from '../library/provider';
 import { buildConnector } from '../geometry/connector';
 import { buildDieCrown } from '../geometry/dieCrown';
 import { detectMargin, resampleByAngle, controlPoints } from '../geometry/margin';
@@ -228,14 +229,18 @@ class MarginTool {
 // ---------------------------------------------------------------------------
 // Design
 
-function generate(ctx: AppContext): void {
+async function generate(ctx: AppContext): Promise<void> {
   const { state, viewport } = ctx;
-  viewport.removeWhere((o) => o.module === MODULE);
   const teeth = teethWithRole(state, 'crown', 'pontic');
   if (!teeth.length) {
+    viewport.removeWhere((o) => o.module === MODULE);
     ctx.status('Mark teeth as Crown or Pontic on the tooth chart first.', 'warn');
     return;
   }
+  await prepareTeeth(teeth);
+  viewport.removeWhere((o) => o.module === MODULE);
+  const library = activeLibrary();
+  const scale = state.params.anatomyScale;
   const issues: string[] = [];
   const scanCache = new Map<string, THREE.BufferGeometry>();
   const scanGeometry = (fdi: number) => {
@@ -259,7 +264,7 @@ function generate(ctx: AppContext): void {
       if (margin && scan) {
         try {
           const basis = new THREE.Matrix4().extractRotation(placements.get(fdi)!.matrix);
-          const r = buildDieCrown(scan, margin, basis, shape, state.params.prep);
+          const r = buildDieCrown(scan, margin, basis, library?.has(fdi) ? outerSurface(fdi, scale) : shape, state.params.prep);
           viewport.add(`${name} (die)`, r.mesh.toGeometry(), MATERIALS.tooth(), {
             category: 'design',
             module: MODULE,
@@ -275,7 +280,24 @@ function generate(ctx: AppContext): void {
           issues.push(`${name}: die fit failed (${(e as Error).message}) – used the parametric prep`);
         }
       }
-      const mb = role === 'crown' ? buildCrownShell(shape, state.params.prep) : buildSolidTooth(shape, 1.0);
+      if (role === 'crown' && library?.has(fdi)) {
+        // library crown on the parametric prep: build it as a die crown on a virtual die (in the tooth frame)
+        try {
+          const die = buildPrepStump(shape, state.params.prep, 3).toGeometry();
+          const prepMargin = prepRings(new ToothSurface(shape), state.params.prep, 0).rings[0];
+          const r = buildDieCrown(die, prepMargin, new THREE.Matrix4(), outerSurface(fdi, scale), state.params.prep);
+          viewport.add(name, r.mesh.toGeometry(), MATERIALS.tooth(), {
+            category: 'design',
+            module: MODULE,
+            matrix: placements.get(fdi)!.matrix,
+            data: { ...base, height: r.height, frame: r.frame, cavity: r.cavity },
+          });
+          return;
+        } catch (e) {
+          issues.push(`${name}: library crown failed (${(e as Error).message}) – used the procedural tooth`);
+        }
+      }
+      const mb = role === 'crown' ? buildCrownShell(shape, state.params.prep) : mergeParts(solidParts(fdi, scale, 0));
       viewport.add(name, mb.toGeometry(), MATERIALS.tooth(), {
         category: 'design',
         module: MODULE,
@@ -290,7 +312,7 @@ function generate(ctx: AppContext): void {
     });
     if (span.length > 1 && span.some((t) => state.roles[t] === 'pontic')) rebuildConnectors(ctx, run);
   });
-  const summary = `Designed ${teeth.length} unit(s)${dieCount ? `, ${dieCount} fitted to scanned dies` : ''}.`;
+  const summary = `Designed ${teeth.length} unit(s)${dieCount ? `, ${dieCount} fitted to scanned dies` : ''}${library ? ' from the tooth library' : ''}.`;
   ctx.status(issues.length ? `${summary} ${issues.join(' · ')}` : summary, issues.length ? 'warn' : 'info');
 }
 
@@ -370,7 +392,7 @@ export const crownBridgeModule: DesignModule = {
   render(ctx) {
     const p = ctx.state.params;
     const regen = () => {
-      if (moduleObjects(ctx).length) generate(ctx);
+      if (moduleObjects(ctx).length) void generate(ctx);
     };
     const root = el('div', {});
     const marginBox = el('div', {});
@@ -452,7 +474,7 @@ export const crownBridgeModule: DesignModule = {
       el(
         'div',
         { class: 'actions' },
-        button('Generate', () => generate(ctx), 'primary'),
+        button('Generate', () => void generate(ctx), 'primary'),
         button('Merge to solid', () => void mergeAll(ctx)),
         button('Export STL', () => void exportSolids(ctx)),
       ),

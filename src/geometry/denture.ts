@@ -134,7 +134,16 @@ export function buildMergedDenture(baseParts: MeshBuilder[], teeth: MeshBuilder[
   return union([...baseParts, ...teeth]);
 }
 
-export function buildDentureTeeth(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE): PlacedPart[] {
+/**
+ * Supplies the closed solid of a tooth in its local frame (cervical line on
+ * z = 0) extending `rootDepth` below it. Defaults to the procedural teeth;
+ * the app passes scanned library teeth (see library/provider.ts).
+ */
+export type ToothSolidFn = (fdi: number, scale: number, rootDepth: number) => MeshBuilder;
+
+export const proceduralSolid: ToothSolidFn = (fdi, scale, rootDepth) => buildSolidTooth(shapeFromTooth(getTooth(fdi), scale), rootDepth);
+
+export function buildDentureTeeth(arch: ArchDefinition, p: DentureParams = DEFAULT_DENTURE, solid: ToothSolidFn = proceduralSolid): PlacedPart[] {
   const placements = placeTeeth(arch, p.toothScale);
   const parts: PlacedPart[] = [];
   for (const fdi of archOrder(arch.jaw)) {
@@ -142,7 +151,7 @@ export function buildDentureTeeth(arch: ArchDefinition, p: DentureParams = DEFAU
     if (pos === 8 || (pos === 7 && !p.includeSecondMolars)) continue;
     const info = getTooth(fdi);
     const shape = shapeFromTooth(info, p.toothScale);
-    parts.push({ fdi, mesh: buildSolidTooth(shape, p.socketDepth), matrix: placements.get(fdi)!.matrix.clone(), height: shape.height });
+    parts.push({ fdi, mesh: solid(fdi, p.toothScale, p.socketDepth), matrix: placements.get(fdi)!.matrix.clone(), height: shape.height });
   }
   return parts;
 }
@@ -153,6 +162,8 @@ export interface ModelOptions {
   /** missing teeth (edentulous span / pontic sites) */
   missing?: number[];
   prep?: PrepParams;
+  /** natural teeth (default: procedural) */
+  solid?: ToothSolidFn;
 }
 
 /**
@@ -206,7 +217,7 @@ export function buildDemoModel(arch: ArchDefinition, opts: ModelOptions = {}): M
     const shape = shapeFromTooth(getTooth(fdi));
     let part: MeshBuilder;
     if (preps.has(fdi)) part = buildPrepStump(shape, opts.prep ?? DEFAULT_PREP, 4);
-    else part = buildSolidTooth(shape, 4);
+    else part = (opts.solid ?? proceduralSolid)(fdi, 1, 4);
     model.append(part.transform(m));
   }
   return model;
