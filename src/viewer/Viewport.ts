@@ -1,6 +1,33 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
+
+// BVH-accelerated ray casting: picking and sculpt brushes stay fast on scans
+// with hundreds of thousands of triangles.
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+
+/** Geometries above this size get a BVH for picking. */
+const BVH_MIN_TRIANGLES = 4000;
+
+function ensureBvh(g: THREE.BufferGeometry): void {
+  const tris = g.index ? g.index.count / 3 : g.getAttribute('position').count / 3;
+  if (!g.boundsTree && tris >= BVH_MIN_TRIANGLES) g.computeBoundsTree();
+}
+
+/**
+ * A tool that takes over left-button drags in the viewport (e.g. a sculpt
+ * brush). `down` returns true to capture the drag; orbiting is then paused.
+ */
+export interface PointerTool {
+  down(hit: { point: THREE.Vector3; object: SceneObject; normal: THREE.Vector3 } | null, e: PointerEvent): boolean;
+  move(hit: { point: THREE.Vector3; object: SceneObject; normal: THREE.Vector3 } | null, e: PointerEvent): void;
+  up(e: PointerEvent): void;
+  /** pointer moving without a captured drag (brush cursor) */
+  hover?(hit: { point: THREE.Vector3; object: SceneObject; normal: THREE.Vector3 } | null): void;
+}
 
 export type ObjectCategory = 'scan' | 'design' | 'helper';
 
@@ -58,6 +85,14 @@ export class Viewport {
   pickHandler: ((point: THREE.Vector3, object: SceneObject) => void) | null = null;
   /** restricts which objects the pick handler can hit (e.g. scans only) */
   pickFilter: ((object: SceneObject) => boolean) | null = null;
+  /** 'any' lets every model (scans included) be selected, e.g. in the Transform tab */
+  selectionMode: 'editable' | 'any' = 'editable';
+  /** show the move / rotate / scale gizmo on the selection */
+  gizmoEnabled = true;
+  /** active drag tool (sculpt brush), if any */
+  pointerTool: PointerTool | null = null;
+  private transformStartListeners = new Set<(o: SceneObject) => void>();
+  private transformEndListeners = new Set<(o: SceneObject) => void>();
 
   constructor(private readonly container: HTMLElement) {
     THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
@@ -78,6 +113,14 @@ export class Viewport {
     this.gizmo.setSize(0.8);
     this.gizmo.addEventListener('dragging-changed', (e) => {
       this.controls.enabled = !(e as unknown as { value: boolean }).value;
+    });
+    this.gizmo.addEventListener('mouseDown', () => {
+      const o = this.selected;
+      if (o) this.transformStartListeners.forEach((fn) => fn(o));
+    });
+    this.gizmo.addEventListener('mouseUp', () => {
+      const o = this.selected;
+      if (o) this.transformEndListeners.forEach((fn) => fn(o));
     });
     this.gizmo.addEventListener('objectChange', () => {
       const o = this.selected;
@@ -122,8 +165,36 @@ export class Viewport {
   private bindPointer(): void {
     const el = this.renderer.domElement;
     let down: { x: number; y: number } | null = null;
-    el.addEventListener('pointerdown', (e) => (down = { x: e.clientX, y: e.clientY }));
+    let toolActive = false;
+    // capture phase on the container: runs before OrbitControls sees the event
+    this.container.addEventListener(
+      'pointerdown',
+      (e) => {
+        down = { x: e.clientX, y: e.clientY };
+        if (this.pointerTool && e.button === 0 && !this.gizmo.dragging) {
+          if (this.pointerTool.down(this.surfaceHit(e.clientX, e.clientY), e)) {
+            toolActive = true;
+            this.controls.enabled = false;
+            el.setPointerCapture(e.pointerId);
+          }
+        }
+      },
+      { capture: true },
+    );
+    el.addEventListener('pointermove', (e) => {
+      if (!this.pointerTool) return;
+      const hit = this.surfaceHit(e.clientX, e.clientY);
+      if (toolActive) this.pointerTool.move(hit, e);
+      else this.pointerTool.hover?.(hit);
+    });
     el.addEventListener('pointerup', (e) => {
+      if (toolActive) {
+        toolActive = false;
+        this.controls.enabled = true;
+        this.pointerTool?.up(e);
+        down = null;
+        return;
+      }
       if (!down || e.button !== 0) return;
       const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
       down = null;
@@ -133,8 +204,51 @@ export class Viewport {
         if (hit) this.pickHandler(hit.point, hit.object);
         return;
       }
-      this.select(hit && hit.object.editable ? hit.object.id : null);
+      this.select(hit && this.selectable(hit.object) ? hit.object.id : null);
     });
+  }
+
+  private selectable(o: SceneObject): boolean {
+    return o.category !== 'helper' && (o.editable || this.selectionMode === 'any');
+  }
+
+  /** Ray cast that also returns the surface normal in world space. */
+  surfaceHit(clientX: number, clientY: number): { point: THREE.Vector3; object: SceneObject; normal: THREE.Vector3 } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const meshes = [...this.objects.values()].filter((o) => o.mesh.visible && o.category !== 'helper').map((o) => o.mesh);
+    for (const h of this.raycaster.intersectObjects(meshes, false)) {
+      if (this.renderer.clippingPlanes.length && this.section.distanceToPoint(h.point) < 0) continue;
+      const obj = [...this.objects.values()].find((o) => o.mesh === h.object);
+      if (!obj || !h.face) continue;
+      const normal = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+      if (normal.dot(this.raycaster.ray.direction) > 0) normal.negate();
+      return { point: h.point.clone(), object: obj, normal };
+    }
+    return null;
+  }
+
+  onTransformStart(fn: (o: SceneObject) => void): void {
+    this.transformStartListeners.add(fn);
+  }
+
+  onTransformEnd(fn: (o: SceneObject) => void): void {
+    this.transformEndListeners.add(fn);
+  }
+
+  /** Rebuild the picking BVH after a geometry was edited in place (sculpting). */
+  refreshBvh(o: SceneObject): void {
+    const g = o.mesh.geometry;
+    if (g.boundsTree) g.boundsTree.refit();
+    else ensureBvh(g);
+    g.computeBoundingSphere();
+    g.computeBoundingBox();
+  }
+
+  /** Notify listeners that objects changed (names, visibility…). */
+  changed(): void {
+    this.emit();
   }
 
   raycast(clientX: number, clientY: number): { point: THREE.Vector3; object: SceneObject } | null {
@@ -158,6 +272,7 @@ export class Viewport {
     material: THREE.Material,
     opts: { category: ObjectCategory; module?: string; editable?: boolean; matrix?: THREE.Matrix4; data?: Record<string, unknown> },
   ): SceneObject {
+    ensureBvh(geometry);
     const mesh = new THREE.Mesh(geometry, material);
     if (opts.matrix) opts.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
     this.scene.add(mesh);
@@ -180,6 +295,7 @@ export class Viewport {
     if (!o) return;
     if (this.selectedId === id) this.select(null);
     this.scene.remove(o.mesh);
+    o.mesh.geometry.disposeBoundsTree?.();
     o.mesh.geometry.dispose();
     (o.mesh.material as THREE.Material).dispose();
     this.objects.delete(id);
@@ -194,7 +310,9 @@ export class Viewport {
   setGeometry(id: string, geometry: THREE.BufferGeometry): void {
     const o = this.objects.get(id);
     if (!o) return;
+    o.mesh.geometry.disposeBoundsTree?.();
     o.mesh.geometry.dispose();
+    ensureBvh(geometry);
     o.mesh.geometry = geometry;
   }
 
@@ -215,12 +333,9 @@ export class Viewport {
     if (prev) (prev.mesh.material as THREE.MeshStandardMaterial).emissive?.setHex(0x000000);
     this.selectedId = id;
     const o = this.selected;
-    if (o && o.editable) {
-      (o.mesh.material as THREE.MeshStandardMaterial).emissive?.setHex(0x1b3a66);
-      this.gizmo.attach(o.mesh);
-    } else {
-      this.gizmo.detach();
-    }
+    if (o) (o.mesh.material as THREE.MeshStandardMaterial).emissive?.setHex(0x1b3a66);
+    if (o && this.gizmoEnabled && this.selectable(o)) this.gizmo.attach(o.mesh);
+    else this.gizmo.detach();
     this.selectListeners.forEach((fn) => fn(o));
     this.emit();
   }

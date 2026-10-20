@@ -24,7 +24,7 @@ export function sceneList(viewport: Viewport): HTMLElement {
             opacity.addEventListener('input', () => viewport.setOpacity(o.id, Number(opacity.value)));
             const name = el('span', { class: 'name', title: o.name }, o.name);
             name.addEventListener('click', () => {
-              if (o.editable) viewport.select(o.id);
+              if (o.editable || viewport.selectionMode === 'any') viewport.select(o.id);
             });
             const del = el('button', { type: 'button', class: 'icon', title: 'Delete', onclick: () => viewport.remove(o.id) }, '×');
             return el('div', { class: `item ${viewport.selected?.id === o.id ? 'selected' : ''}` }, vis, name, opacity, del);

@@ -37,13 +37,16 @@ Library crowns end just below the cervical line. Where a tooth has to sit deeper
 2. **Case tab.** Enter the case details, then import upper/lower scans or click *Demo models*. *Pick arch points* fits the arch curve to a scan: click cusp tips from one distal end to the other.
 3. **Design tabs.** Each module has a parameter panel and a *Generate* button. If you change a parameter after generating, the design rebuilds automatically.
 4. **Adjust.** Click a design object to select it, then press **W**, **E** or **R** to move, rotate or scale it. Bridge connectors follow their units as you move them.
-5. **Check & export.** The selection panel shows the triangle count, the volume and whether the mesh is watertight. A section plane lets you inspect wall thickness. Bridges and one-piece dentures export as **one fused manifold solid**.
+5. **Undo.** Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) undo and redo moves, sculpt strokes and repairs.
+6. **Check & export.** The selection panel shows the triangle count, the volume and whether the mesh is watertight. A section plane lets you inspect wall thickness. Bridges and one-piece dentures export as **one fused manifold solid**.
 
 | Module | What it does today |
 |---|---|
 | **Crown & Bridge** | **Margin line**: automatic detection on the scanned prep (*Detect*, *Detect at click*, *Detect all crowns*), freehand drawing (*Draw*), and point editing (*Edit points*: click where the line should run and the nearest control point moves there). **Die-fitted crowns**: with a margin, the intaglio follows the scanned die and the library tooth is warped so that its margin lands exactly on the line, with minimum axial/occlusal thickness enforced. **Cement gap**: set the gap and a gap-free band at the margin; the gap ramps in over 0.5 mm. Without a margin, crowns use a parametric prep. Adjacent units become bridges with ovate pontics and connectors sized by cross-section area (mm²). *Merge to solid* / *Export STL* fuse each bridge into one solid with clear intaglios. |
 | **Denture** | Complete upper and/or lower set-up: base swept along the arch with buccal/lingual flanges and an optional palate, plus library teeth you can adjust one by one. **One-piece**: base and teeth export fused into one solid. **Two-piece**: teeth and base are separate parts. Each tooth gets a socket in the base, cut as the tooth grown by the **socket tolerance** (offset), so the printed teeth fit with an even bonding gap. Settings: tooth depth into base, tolerance. Sockets re-cut automatically when you move a tooth. |
 | **Nightguard** | Splint built from the arch scan. A height field along the insertion axis blocks out undercuts automatically. Options: flat bite plane or smoothed anatomic surface, minimum thickness, fit gap, coverage depth, wall thickness, outline smoothing. Reports the occlusal thickness it achieved. |
+| **Transform** | Select any object, scans included, and move, rotate or scale it with the gizmo (W / E / R, world or local axes), typed values, or nudge buttons in fixed steps. Quick actions: *Center on grid*, *Reset*, and *Apply to mesh* (writes the transform into the mesh). *Orient occlusal plane*: click three cusp tips and the model is rotated so that plane is horizontal. Margin lines move with their scan. |
+| **Sculpt** | Meshmixer-style brushes on any mesh: **Draw**, **Remove**, **Inflate**, **Smooth** (or hold Shift), **Flatten** and **Grab**, with size and strength. **Inspector & repair**: *Inspect* (marks holes, counts pieces / non-manifold / degenerate triangles), *Fill holes* (up to a size limit; smooth patch that follows the surface), *Weld & clean*, *Fix normals*, *Remove small pieces* (floating scan debris), and *Plane cut* (with flat closing, e.g. to trim a model base). |
 | **Wax-up** | Proposes library teeth at the chosen positions for you to adjust. Exports alone or merged with the model, for printing a mock-up or putty-index model. |
 
 ![Two-piece lower denture: base with tooth sockets (teeth hidden)](docs/screenshot-two-piece-denture.png)
@@ -63,6 +66,8 @@ src/
     MeshBuilder.ts   ring-based indexed mesh builder + watertightness/volume check
     toothShape.ts    procedural tooth library, crown shell, prep die, solid tooth
     margin.ts        margin detection, resampling, editing helpers
+    sculpt.ts        sculpt brushes (draw, remove, inflate, smooth, flatten, grab)
+    repair.ts        inspector, hole filling, weld & clean, fix normals, small-piece removal, plane cut
     dieCrown.ts      crown fitted to a scanned die (intaglio, cement gap, thickness)
     csg.ts           union / difference via manifold-3d (WASM)
     connector.ts     bridge connectors
@@ -80,13 +85,14 @@ Conventions: units are millimetres and the world is **Z-up**, with +Y anterior a
 
 ## Roadmap
 
-1. **Library tools.** Pick between several libraries (shape and size variants), adapt library crowns to their neighbours and antagonist, and add sculpting tools.
+1. **Library tools.** Pick between several libraries (shape and size variants), and adapt library crowns to their neighbours and antagonist.
 2. **Die workflow.** Per-tooth insertion axis with undercut block-out, a margin editor that drags points along the surface, and spacer zones (e.g. extra occlusal gap for milling).
-3. **Occlusion.** Contact detection and colour maps against the antagonist, a virtual articulator, and occlusal adjustment. Add sculpting tools (add/remove/smooth wax brushes).
-4. **Dentures.** Edentulous-scan outline drawing, tooth set-up rules (occlusal plane, compensating curves), gingival festoon sculpting, and a splinted teeth-arch option for two-piece.
-5. **Nightguards.** Undercut-retention control, anterior guidance ramps, and adjustment against the bite registration.
-6. **Implant abutments.** Removed for now; the earlier parametric version is in git history (commit `da7b399`) and can be restored with implant-system libraries.
-7. **Production.** Material-specific minimum-thickness checks, nesting/sprue hints, and lab-management integration.
+3. **Occlusion.** Contact detection and colour maps against the antagonist, a virtual articulator, and occlusal adjustment.
+4. **Sculpting.** Dynamic remeshing under the brush (large edits currently stretch triangles), symmetric brushes, masking, and region selection (select → delete / smooth / extrude).
+5. **Dentures.** Edentulous-scan outline drawing, tooth set-up rules (occlusal plane, compensating curves), gingival festoon sculpting, and a splinted teeth-arch option for two-piece.
+6. **Nightguards.** Undercut-retention control, anterior guidance ramps, and adjustment against the bite registration.
+7. **Implant abutments.** Removed for now; the earlier parametric version is in git history (commit `da7b399`) and can be restored with implant-system libraries.
+8. **Production.** Material-specific minimum-thickness checks, nesting/sprue hints, and lab-management integration.
 
 ## License
 

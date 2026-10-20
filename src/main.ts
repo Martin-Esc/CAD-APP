@@ -17,8 +17,11 @@ import { crownBridgeModule } from './modules/crownBridge';
 import { dentureModule } from './modules/denture';
 import { nightguardModule } from './modules/nightguard';
 import { waxupModule } from './modules/waxup';
+import { transformModule, recordTransform } from './modules/transform';
+import { sculptModule } from './modules/sculpt';
+import { History } from './core/history';
 
-const MODULES: DesignModule[] = [casePanel, crownBridgeModule, dentureModule, nightguardModule, waxupModule];
+const MODULES: DesignModule[] = [casePanel, transformModule, crownBridgeModule, dentureModule, nightguardModule, waxupModule, sculptModule];
 
 class App {
   private state: CaseState = newCase();
@@ -59,6 +62,11 @@ class App {
       status: (msg, kind = 'info') => this.status(msg, kind),
       exportObjects: (objs, name) => this.exportObjects(objs, name),
       library: () => this.library,
+      history: this.history,
+      objectMoved: (o) => {
+        MODULES.find((m) => m.id === o.module)?.onTransform?.(this.ctx, o);
+        this.viewport.changed();
+      },
       setToothLibrary: (mode) => {
         this.state.params.toothLibrary = mode;
         this.applyLibrary();
@@ -70,6 +78,19 @@ class App {
     };
 
     this.viewport.onTransform((o) => MODULES.find((m) => m.id === o.module)?.onTransform?.(this.ctx, o));
+    // every gizmo drag (in any tab) can be undone
+    let dragStart: THREE.Matrix4 | null = null;
+    this.viewport.onTransformStart((o) => {
+      o.mesh.updateMatrix();
+      dragStart = o.mesh.matrix.clone();
+    });
+    this.viewport.onTransformEnd((o) => {
+      if (!dragStart) return;
+      o.mesh.updateMatrix();
+      const label = { translate: 'Move', rotate: 'Rotate', scale: 'Scale' }[this.viewport.gizmo.mode] ?? 'Transform';
+      recordTransform(this.ctx, o, dragStart, o.mesh.matrix.clone(), label);
+      dragStart = null;
+    });
     this.viewport.onSelect((o) => this.renderSelection(o));
     this.bindKeys();
     this.renderAll();
@@ -77,6 +98,7 @@ class App {
   }
 
   private library: ToothLibrary | null = null;
+  private readonly history = new History();
 
   /** Activate the scanned library when it is loaded and the case asks for it (never changes the case's choice). */
   private applyLibrary(): void {
@@ -111,6 +133,7 @@ class App {
         button('New case', () => {
           if (!confirm('Discard the current case and all designs?')) return;
           this.viewport.removeWhere(() => true);
+          this.history.clear();
           this.state = newCase();
           this.renderAll();
         }),
@@ -161,10 +184,13 @@ class App {
             type: 'button',
             class: m.id === this.activeTab ? 'active' : '',
             onclick: () => {
+              if (m.id === this.activeTab) return;
               // leave any pick mode (margin drawing, arch picking) of the previous tab
+              MODULES.find((x) => x.id === this.activeTab)?.deactivate?.(this.ctx);
               this.viewport.pickHandler = null;
               this.viewport.pickFilter = null;
               this.activeTab = m.id;
+              m.activate?.(this.ctx);
               this.renderTabs();
             },
           },
@@ -201,6 +227,22 @@ class App {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
       const g = this.viewport.gizmo;
       switch (e.key.toLowerCase()) {
+        case 'z':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const label = e.shiftKey ? this.history.redo() : this.history.undo();
+            this.status(label ? `${e.shiftKey ? 'Redid' : 'Undid'}: ${label}` : `Nothing to ${e.shiftKey ? 'redo' : 'undo'}.`);
+            return;
+          }
+          break;
+        case 'y':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            const label = this.history.redo();
+            this.status(label ? `Redid: ${label}` : 'Nothing to redo.');
+            return;
+          }
+          break;
         case 'w': g.setMode('translate'); break;
         case 'e': g.setMode('rotate'); break;
         case 'r': g.setMode('scale'); break;

@@ -4,6 +4,7 @@ import type { CaseState } from '../core/case';
 import type { ArchDefinition } from '../core/arch';
 import type { Jaw } from '../core/teeth';
 import type { ToothLibrary } from '../library/toothLibrary';
+import type { History } from '../core/history';
 
 export interface AppContext {
   viewport: Viewport;
@@ -19,6 +20,10 @@ export interface AppContext {
   library(): ToothLibrary | null;
   /** switch between the scanned library and procedural teeth */
   setToothLibrary(mode: 'scanned' | 'procedural'): void;
+  /** undo / redo for transforms, sculpting and repairs */
+  history: History;
+  /** tell the owning module that an object was moved (e.g. rebuild connectors) */
+  objectMoved(object: SceneObject): void;
   /** export world-space geometries (e.g. boolean results) as one STL */
   exportGeometries(geometries: THREE.BufferGeometry[], name: string): void;
 }
@@ -28,6 +33,9 @@ export interface DesignModule {
   title: string;
   /** build the parameter panel */
   render(ctx: AppContext): HTMLElement;
+  /** the tab was opened / left (set up or tear down viewport tools) */
+  activate?(ctx: AppContext): void;
+  deactivate?(ctx: AppContext): void;
   /** called while the user drags one of this module's objects */
   onTransform?(ctx: AppContext, object: SceneObject): void;
 }

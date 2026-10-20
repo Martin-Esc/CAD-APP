@@ -169,3 +169,23 @@ main { display: grid; grid-template-columns: 340px 1fr 260px; min-height: 0; }
   main { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
   .stage { order: -1; }
 }
+
+/* Transform tab */
+.xyz { display: grid; grid-template-columns: 62px repeat(3, 1fr) 22px; align-items: center; gap: 4px; margin: 4px 0; }
+.xyz label { display: flex; align-items: center; gap: 3px; }
+.xyz label small { color: var(--muted); width: 8px; }
+.xyz input {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 4px;
+  font: inherit;
+}
+.xyz > small { color: var(--muted); }
+.nudge { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin: 4px 0; }
+.nudge > span { width: 52px; color: #c3cbd8; }
+.nudge select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 3px; font: inherit; }
+.btn.small { padding: 3px 6px; font-size: 11px; }
