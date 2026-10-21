@@ -27,6 +27,8 @@ export interface PointerTool {
   up(e: PointerEvent): void;
   /** pointer moving without a captured drag (brush cursor) */
   hover?(hit: { point: THREE.Vector3; object: SceneObject; normal: THREE.Vector3 } | null): void;
+  /** return false when the tool does its own picking during a drag (skips the scene-wide ray cast) */
+  wantsHitWhileDragging?(): boolean;
 }
 
 export type ObjectCategory = 'scan' | 'design' | 'helper';
@@ -183,6 +185,10 @@ export class Viewport {
     );
     el.addEventListener('pointermove', (e) => {
       if (!this.pointerTool) return;
+      if (toolActive && this.pointerTool.wantsHitWhileDragging?.() === false) {
+        this.pointerTool.move(null, e);
+        return;
+      }
       const hit = this.surfaceHit(e.clientX, e.clientY);
       if (toolActive) this.pointerTool.move(hit, e);
       else this.pointerTool.hover?.(hit);
@@ -238,8 +244,9 @@ export class Viewport {
   }
 
   /** Rebuild the picking BVH after a geometry was edited in place (sculpting). */
-  refreshBvh(o: SceneObject): void {
+  refreshBvh(o: SceneObject, rebuild = false): void {
     const g = o.mesh.geometry;
+    if (rebuild) g.disposeBoundsTree?.();
     if (g.boundsTree) g.boundsTree.refit();
     else ensureBvh(g);
     g.computeBoundingSphere();

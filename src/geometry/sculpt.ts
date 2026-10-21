@@ -1,13 +1,18 @@
 import * as THREE from 'three';
+import { DynamicMesh, applySnapshot } from './dynamesh';
 
 /**
- * Meshmixer-style sculpt brushes working directly on an indexed
- * BufferGeometry (positions edited in place, normals updated locally).
+ * Meshmixer-style sculpt brushes with optional dynamic remeshing.
+ *
+ * The Sculptor owns a DynamicMesh copy of the object's geometry. During a
+ * stroke the geometry is bound to the live buffers (`begin` / `flush`); at
+ * the end it gets exact-size arrays again (`end`), so export, repair and
+ * booleans always see a clean mesh.
  *
  * All coordinates are in the mesh's local space: callers convert the brush
  * centre with the inverse of the object's world matrix.
  */
-export type BrushKind = 'draw' | 'remove' | 'inflate' | 'smooth' | 'flatten' | 'grab';
+export type BrushKind = 'draw' | 'remove' | 'inflate' | 'smooth' | 'flatten' | 'grab' | 'refine';
 
 export const BRUSH_LABELS: Record<BrushKind, string> = {
   draw: 'Draw',
@@ -16,6 +21,7 @@ export const BRUSH_LABELS: Record<BrushKind, string> = {
   smooth: 'Smooth',
   flatten: 'Flatten',
   grab: 'Grab',
+  refine: 'Refine',
 };
 
 export interface BrushSettings {
@@ -25,9 +31,18 @@ export interface BrushSettings {
   strength: number;
 }
 
+export interface RemeshSettings {
+  /** target edge length under the brush (mm) */
+  detail: number;
+  /** split long edges (add detail) */
+  refine: boolean;
+  /** collapse short edges (remove detail) */
+  reduce: boolean;
+}
+
 interface Selection {
-  ids: Int32Array;
-  weights: Float32Array;
+  ids: number[];
+  weights: number[];
 }
 
 /** Smooth falloff: 1 at the centre, 0 at the rim, flat derivative at both ends. */
@@ -37,240 +52,207 @@ function falloff(d: number, r: number): number {
 }
 
 export class Sculptor {
-  readonly positions: Float32Array;
-  readonly normals: Float32Array;
-  private readonly index: ArrayLike<number>;
-  /** vertex -> neighbouring vertices (CSR) */
-  private readonly nbStart: Int32Array;
-  private readonly nbList: Int32Array;
-  /** vertex -> incident faces (CSR) */
-  private readonly vfStart: Int32Array;
-  private readonly vfList: Int32Array;
-  private grab: { sel: Selection; origin: Float32Array } | null = null;
+  readonly mesh: DynamicMesh;
+  private grab: { sel: Selection; origin: Float32Array; center: THREE.Vector3; radius: number; delta: THREE.Vector3 } | null = null;
 
   constructor(readonly geometry: THREE.BufferGeometry) {
-    if (!geometry.index) throw new Error('Sculpting needs an indexed mesh – run "Weld & clean" first');
-    if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
-    this.positions = geometry.getAttribute('position').array as Float32Array;
-    this.normals = geometry.getAttribute('normal').array as Float32Array;
-    this.index = geometry.index.array;
-    const n = this.positions.length / 3;
-    const triCount = this.index.length / 3;
+    this.mesh = new DynamicMesh(geometry);
+  }
 
-    // vertex -> faces
-    const vfCount = new Int32Array(n + 1);
-    for (let i = 0; i < this.index.length; i++) vfCount[this.index[i] + 1]++;
-    for (let i = 0; i < n; i++) vfCount[i + 1] += vfCount[i];
-    this.vfStart = vfCount;
-    this.vfList = new Int32Array(this.index.length);
-    const fill = vfCount.slice(0, n);
-    for (let t = 0; t < triCount; t++) for (let k = 0; k < 3; k++) this.vfList[fill[this.index[t * 3 + k]]++] = t;
-
-    // vertex -> neighbours (unique)
-    const sets: number[][] = Array.from({ length: n }, () => []);
-    for (let t = 0; t < triCount; t++) {
-      const a = this.index[t * 3], b = this.index[t * 3 + 1], c = this.index[t * 3 + 2];
-      sets[a].push(b, c);
-      sets[b].push(a, c);
-      sets[c].push(a, b);
-    }
-    this.nbStart = new Int32Array(n + 1);
-    const flat: number[] = [];
-    for (let v = 0; v < n; v++) {
-      const uniq = [...new Set(sets[v])];
-      this.nbStart[v] = flat.length;
-      flat.push(...uniq);
-    }
-    this.nbStart[n] = flat.length;
-    this.nbList = new Int32Array(flat);
+  /** Current positions (live view; re-read after topology changes). */
+  get positions(): Float32Array {
+    return this.mesh.pos.subarray(0, this.mesh.vCount * 3);
   }
 
   get vertexCount(): number {
-    return this.positions.length / 3;
+    return this.mesh.vCount;
   }
 
-  /** Vertices within `radius` of `center`, with falloff weights. */
+  get triangleCount(): number {
+    return this.mesh.fCount;
+  }
+
   select(center: THREE.Vector3, radius: number): Selection {
-    const p = this.positions;
-    const r2 = radius * radius;
-    const ids: number[] = [];
-    const w: number[] = [];
-    for (let v = 0, i = 0; i < p.length; v++, i += 3) {
-      const dx = p[i] - center.x;
-      if (dx > radius || dx < -radius) continue;
-      const dy = p[i + 1] - center.y;
-      if (dy > radius || dy < -radius) continue;
-      const dz = p[i + 2] - center.z;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 > r2) continue;
-      ids.push(v);
-      w.push(falloff(Math.sqrt(d2), radius));
-    }
-    return { ids: Int32Array.from(ids), weights: Float32Array.from(w) };
+    const ids = this.mesh.within(center, radius);
+    const p = this.mesh.pos;
+    const weights = ids.map((v) => falloff(Math.hypot(p[v * 3] - center.x, p[v * 3 + 1] - center.y, p[v * 3 + 2] - center.z), radius));
+    return { ids, weights };
   }
 
   private areaNormal(sel: Selection): THREE.Vector3 {
     const n = new THREE.Vector3();
-    for (let k = 0; k < sel.ids.length; k++) {
-      const i = sel.ids[k] * 3;
-      n.x += this.normals[i] * sel.weights[k];
-      n.y += this.normals[i + 1] * sel.weights[k];
-      n.z += this.normals[i + 2] * sel.weights[k];
-    }
+    const nrm = this.mesh.nrm;
+    sel.ids.forEach((v, k) => {
+      n.x += nrm[v * 3] * sel.weights[k];
+      n.y += nrm[v * 3 + 1] * sel.weights[k];
+      n.z += nrm[v * 3 + 2] * sel.weights[k];
+    });
     return n.lengthSq() > 0 ? n.normalize() : n.set(0, 0, 1);
   }
 
   private centroid(sel: Selection): THREE.Vector3 {
     const c = new THREE.Vector3();
+    const p = this.mesh.pos;
     let sw = 0;
-    for (let k = 0; k < sel.ids.length; k++) {
-      const i = sel.ids[k] * 3;
-      c.x += this.positions[i] * sel.weights[k];
-      c.y += this.positions[i + 1] * sel.weights[k];
-      c.z += this.positions[i + 2] * sel.weights[k];
+    sel.ids.forEach((v, k) => {
+      c.x += p[v * 3] * sel.weights[k];
+      c.y += p[v * 3 + 1] * sel.weights[k];
+      c.z += p[v * 3 + 2] * sel.weights[k];
       sw += sel.weights[k];
-    }
+    });
     return sw > 0 ? c.divideScalar(sw) : c;
   }
 
   /**
-   * One brush dab at `center`. `normalHint` is the surface normal under the
-   * cursor (used when the brush area is too small to average). Returns the
-   * affected vertices.
+   * One brush dab at `center`. With `remesh`, the region is re-triangulated
+   * to the target edge length first, so the brush always works on even
+   * triangles. Returns the number of affected vertices.
    */
-  dab(kind: Exclude<BrushKind, 'grab'>, center: THREE.Vector3, brush: BrushSettings): Int32Array {
+  dab(kind: Exclude<BrushKind, 'grab'>, center: THREE.Vector3, brush: BrushSettings, remesh?: RemeshSettings | null): number {
+    if (kind === 'refine') {
+      // remesh only: even out the triangles without changing the shape
+      const r = remesh ?? { detail: brush.radius / 10, refine: true, reduce: true };
+      this.mesh.remesh(center, brush.radius, this.detailFor(brush, r), { ...r, passes: 2 });
+      return 1;
+    }
+    if (remesh) this.mesh.remesh(center, brush.radius * 1.15, this.detailFor(brush, remesh), { ...remesh, passes: 1 });
     const sel = this.select(center, brush.radius);
-    if (!sel.ids.length) return sel.ids;
-    const p = this.positions;
+    if (!sel.ids.length) return 0;
+    const p = this.mesh.pos;
+    const nrm = this.mesh.nrm;
     const s = THREE.MathUtils.clamp(brush.strength, 0, 1);
     if (kind === 'draw' || kind === 'remove') {
       const n = this.areaNormal(sel);
       const amount = (kind === 'draw' ? 1 : -1) * s * brush.radius * 0.18;
-      for (let k = 0; k < sel.ids.length; k++) {
-        const i = sel.ids[k] * 3;
+      sel.ids.forEach((v, k) => {
         const d = amount * sel.weights[k];
-        p[i] += n.x * d;
-        p[i + 1] += n.y * d;
-        p[i + 2] += n.z * d;
-      }
+        p[v * 3] += n.x * d;
+        p[v * 3 + 1] += n.y * d;
+        p[v * 3 + 2] += n.z * d;
+      });
     } else if (kind === 'inflate') {
       const amount = s * brush.radius * 0.12;
-      for (let k = 0; k < sel.ids.length; k++) {
-        const i = sel.ids[k] * 3;
+      sel.ids.forEach((v, k) => {
         const d = amount * sel.weights[k];
-        p[i] += this.normals[i] * d;
-        p[i + 1] += this.normals[i + 1] * d;
-        p[i + 2] += this.normals[i + 2] * d;
-      }
+        p[v * 3] += nrm[v * 3] * d;
+        p[v * 3 + 1] += nrm[v * 3 + 1] * d;
+        p[v * 3 + 2] += nrm[v * 3 + 2] * d;
+      });
     } else if (kind === 'smooth') {
       this.smoothSelection(sel, Math.min(1, s * 1.2), 2);
     } else if (kind === 'flatten') {
       const n = this.areaNormal(sel);
       const c = this.centroid(sel);
-      for (let k = 0; k < sel.ids.length; k++) {
-        const i = sel.ids[k] * 3;
-        const dist = (p[i] - c.x) * n.x + (p[i + 1] - c.y) * n.y + (p[i + 2] - c.z) * n.z;
+      sel.ids.forEach((v, k) => {
+        const dist = (p[v * 3] - c.x) * n.x + (p[v * 3 + 1] - c.y) * n.y + (p[v * 3 + 2] - c.z) * n.z;
         const d = dist * s * 0.5 * sel.weights[k];
-        p[i] -= n.x * d;
-        p[i + 1] -= n.y * d;
-        p[i + 2] -= n.z * d;
-      }
+        p[v * 3] -= n.x * d;
+        p[v * 3 + 1] -= n.y * d;
+        p[v * 3 + 2] -= n.z * d;
+      });
     }
-    this.updateNormals(sel.ids);
-    return sel.ids;
+    this.mesh.touch(sel.ids);
+    this.mesh.updateNormals(sel.ids);
+    return sel.ids.length;
+  }
+
+  /** Remesh around a stroke segment once per pointer move (cheaper than per dab). */
+  remeshSegment(from: THREE.Vector3, to: THREE.Vector3, brush: BrushSettings, remesh: RemeshSettings): void {
+    const center = from.clone().add(to).multiplyScalar(0.5);
+    const radius = brush.radius * 1.15 + from.distanceTo(to) / 2;
+    this.mesh.remesh(center, radius, this.detailFor(brush, remesh), { ...remesh, passes: 1 });
+  }
+
+  /** Target edge length: the requested detail, but never so fine that one dab creates thousands of triangles. */
+  private detailFor(brush: BrushSettings, remesh: RemeshSettings): number {
+    return Math.max(remesh.detail, brush.radius / 25);
   }
 
   /** Laplacian smoothing of the selected vertices toward their neighbours. */
   smoothSelection(sel: Selection, amount: number, iterations = 1): void {
-    const p = this.positions;
-    const next = new Float32Array(sel.ids.length * 3);
+    const p = this.mesh.pos;
     for (let it = 0; it < iterations; it++) {
-      for (let k = 0; k < sel.ids.length; k++) {
-        const v = sel.ids[k];
+      const next = sel.ids.map((v, k) => {
+        const nb = this.mesh.neighbours(v);
         let x = 0, y = 0, z = 0;
-        const a = this.nbStart[v], b = this.nbStart[v + 1];
-        for (let j = a; j < b; j++) {
-          const u = this.nbList[j] * 3;
-          x += p[u];
-          y += p[u + 1];
-          z += p[u + 2];
+        for (const u of nb) {
+          x += p[u * 3];
+          y += p[u * 3 + 1];
+          z += p[u * 3 + 2];
         }
-        const cnt = b - a || 1;
+        const cnt = nb.length || 1;
         const t = amount * sel.weights[k];
-        const i = v * 3;
-        next[k * 3] = p[i] + (x / cnt - p[i]) * t;
-        next[k * 3 + 1] = p[i + 1] + (y / cnt - p[i + 1]) * t;
-        next[k * 3 + 2] = p[i + 2] + (z / cnt - p[i + 2]) * t;
-      }
-      for (let k = 0; k < sel.ids.length; k++) {
-        const i = sel.ids[k] * 3;
-        p[i] = next[k * 3];
-        p[i + 1] = next[k * 3 + 1];
-        p[i + 2] = next[k * 3 + 2];
-      }
+        return [p[v * 3] + (x / cnt - p[v * 3]) * t, p[v * 3 + 1] + (y / cnt - p[v * 3 + 1]) * t, p[v * 3 + 2] + (z / cnt - p[v * 3 + 2]) * t];
+      });
+      sel.ids.forEach((v, k) => {
+        p[v * 3] = next[k][0];
+        p[v * 3 + 1] = next[k][1];
+        p[v * 3 + 2] = next[k][2];
+      });
     }
   }
 
   /** Start a Grab stroke: remembers the region and its original positions. */
-  beginGrab(center: THREE.Vector3, brush: BrushSettings): void {
+  beginGrab(center: THREE.Vector3, brush: BrushSettings, remesh?: RemeshSettings | null): void {
+    if (remesh) this.mesh.remesh(center, brush.radius * 1.15, this.detailFor(brush, remesh), { ...remesh, passes: 1 });
     const sel = this.select(center, brush.radius);
     const origin = new Float32Array(sel.ids.length * 3);
-    for (let k = 0; k < sel.ids.length; k++) origin.set(this.positions.subarray(sel.ids[k] * 3, sel.ids[k] * 3 + 3), k * 3);
-    this.grab = { sel, origin };
+    sel.ids.forEach((v, k) => origin.set(this.mesh.pos.subarray(v * 3, v * 3 + 3), k * 3));
+    this.grab = { sel, origin, center: center.clone(), radius: brush.radius, delta: new THREE.Vector3() };
   }
 
   /** Move the grabbed region by `delta` (from the stroke start), weighted by falloff. */
-  grabTo(delta: THREE.Vector3, strength: number): Int32Array {
-    if (!this.grab) return new Int32Array();
+  grabTo(delta: THREE.Vector3, strength: number): number {
+    if (!this.grab) return 0;
     const { sel, origin } = this.grab;
+    const p = this.mesh.pos;
     const s = THREE.MathUtils.clamp(strength, 0, 1) * 0.5 + 0.5;
-    for (let k = 0; k < sel.ids.length; k++) {
-      const i = sel.ids[k] * 3;
+    sel.ids.forEach((v, k) => {
       const w = sel.weights[k] * s;
-      this.positions[i] = origin[k * 3] + delta.x * w;
-      this.positions[i + 1] = origin[k * 3 + 1] + delta.y * w;
-      this.positions[i + 2] = origin[k * 3 + 2] + delta.z * w;
-    }
-    this.updateNormals(sel.ids);
-    return sel.ids;
+      p[v * 3] = origin[k * 3] + delta.x * w;
+      p[v * 3 + 1] = origin[k * 3 + 1] + delta.y * w;
+      p[v * 3 + 2] = origin[k * 3 + 2] + delta.z * w;
+    });
+    this.grab.delta.copy(delta);
+    this.mesh.updateNormals(sel.ids);
+    return sel.ids.length;
   }
 
-  endGrab(): void {
+  /** End a Grab stroke; with remeshing, the stretched region is re-triangulated. */
+  endGrab(remesh?: RemeshSettings | null): void {
+    const g = this.grab;
     this.grab = null;
+    if (!g || !remesh) return;
+    const len = g.delta.length();
+    const center = g.center.clone().addScaledVector(g.delta, 0.5);
+    const detail = this.detailFor({ radius: g.radius, strength: 1 }, remesh);
+    this.mesh.remesh(center, g.radius * 1.2 + len * 0.6, detail, { ...remesh, passes: 3, maxOps: 20000 });
   }
 
-  /** Recompute the vertex normals of the given vertices and their neighbours. */
-  updateNormals(ids: Int32Array): void {
-    const p = this.positions;
-    const nrm = this.normals;
-    const touched = new Set<number>();
-    for (const v of ids) {
-      touched.add(v);
-      for (let j = this.nbStart[v]; j < this.nbStart[v + 1]; j++) touched.add(this.nbList[j]);
-    }
-    const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), fn = new THREE.Vector3();
-    for (const v of touched) {
-      let nx = 0, ny = 0, nz = 0;
-      for (let j = this.vfStart[v]; j < this.vfStart[v + 1]; j++) {
-        const t = this.vfList[j] * 3;
-        const a = this.index[t] * 3, b = this.index[t + 1] * 3, c = this.index[t + 2] * 3;
-        e1.set(p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]);
-        e2.set(p[c] - p[a], p[c + 1] - p[a + 1], p[c + 2] - p[a + 2]);
-        fn.crossVectors(e1, e2);
-        nx += fn.x;
-        ny += fn.y;
-        nz += fn.z;
-      }
-      const len = Math.hypot(nx, ny, nz) || 1;
-      nrm[v * 3] = nx / len;
-      nrm[v * 3 + 1] = ny / len;
-      nrm[v * 3 + 2] = nz / len;
-    }
+  /** Remesh a region without changing its shape (Meshmixer's "Refine"). */
+  remeshAt(center: THREE.Vector3, radius: number, remesh: RemeshSettings): void {
+    this.mesh.remesh(center, radius, this.detailFor({ radius, strength: 1 }, remesh), { ...remesh, passes: 3, maxOps: 50000 });
   }
 
-  /** Flag the buffers for upload after edits. */
+  /** Bind the geometry to the live buffers for the duration of a stroke. */
+  begin(): void {
+    this.mesh.attach(this.geometry);
+  }
+
+  /** Upload the latest changes (call once per pointer event). */
+  flush(): void {
+    this.mesh.flush(this.geometry);
+  }
+
+  /** Finish a stroke: the geometry gets exact-size arrays (also usable for undo). */
+  end(): { position: Float32Array; normal: Float32Array; index: Uint32Array } {
+    const snap = this.mesh.snapshot();
+    applySnapshot(this.geometry, snap);
+    return snap;
+  }
+
+  /** Back-compat for callers that edit without a live stroke (tests). */
   commit(): void {
-    this.geometry.getAttribute('position').needsUpdate = true;
-    this.geometry.getAttribute('normal').needsUpdate = true;
+    this.end();
   }
 }

@@ -117,37 +117,37 @@ describe('sculpt brushes', () => {
     const v0 = checkMesh(g).volume;
     const s = new Sculptor(g);
     for (let i = 0; i < 5; i++) s.dab('draw', center(tooth()), { radius: 2, strength: 0.6 });
-    s.commit();
+    s.end();
     const v1 = checkMesh(g).volume;
     expect(v1).toBeGreaterThan(v0);
     for (let i = 0; i < 10; i++) s.dab('remove', center(tooth()), { radius: 2, strength: 0.6 });
+    s.end();
     expect(checkMesh(g).volume).toBeLessThan(v1);
     expect(checkMesh(g).watertight).toBe(true);
   });
 
   it('smooth reduces roughness', () => {
     const g = tooth();
-    const s = new Sculptor(g);
-    const pos = g.getAttribute('position');
-    // add noise near the brush
     const c = center(tooth());
-    for (let i = 0; i < pos.count; i++) {
-      const p = new THREE.Vector3().fromBufferAttribute(pos, i);
-      if (p.distanceTo(c) < 2) pos.setXYZ(i, p.x + (Math.random() - 0.5) * 0.4, p.y, p.z);
-    }
-    const idx = g.getIndex()!;
-    const nb = new Map<number, Set<number>>();
-    for (let t = 0; t < idx.count; t += 3) {
-      const tri = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)];
-      for (const a of tri) for (const b of tri) if (a !== b) (nb.get(a) ?? nb.set(a, new Set()).get(a)!).add(b);
+    const noisy = g.getAttribute('position');
+    for (let i = 0; i < noisy.count; i++) {
+      const p = new THREE.Vector3().fromBufferAttribute(noisy, i);
+      if (p.distanceTo(c) < 2) noisy.setXYZ(i, p.x + (Math.random() - 0.5) * 0.4, p.y, p.z);
     }
     // roughness: mean distance of each vertex from the average of its neighbours
-    const rough = () => {
+    const rough = (geo: THREE.BufferGeometry) => {
+      const pos = geo.getAttribute('position');
+      const idx = geo.getIndex()!;
+      const nb = new Map<number, Set<number>>();
+      for (let t = 0; t < idx.count; t += 3) {
+        const tri = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)];
+        for (const a of tri) for (const b of tri) if (a !== b) (nb.get(a) ?? nb.set(a, new Set()).get(a)!).add(b);
+      }
       let sum = 0;
       let n = 0;
       for (let i = 0; i < pos.count; i++) {
         const p = new THREE.Vector3().fromBufferAttribute(pos, i);
-        if (p.distanceTo(c) > 1.5) continue;
+        if (p.distanceTo(c) > 1.5 || !nb.has(i)) continue;
         const avg = new THREE.Vector3();
         for (const j of nb.get(i)!) avg.add(new THREE.Vector3().fromBufferAttribute(pos, j));
         sum += avg.divideScalar(nb.get(i)!.size).distanceTo(p);
@@ -155,9 +155,11 @@ describe('sculpt brushes', () => {
       }
       return sum / n;
     };
-    const before = rough();
+    const before = rough(g);
+    const s = new Sculptor(g);
     for (let i = 0; i < 6; i++) s.dab('smooth', c, { radius: 2.5, strength: 1 });
-    expect(rough()).toBeLessThan(before);
+    s.end();
+    expect(rough(g)).toBeLessThan(before);
   });
 
   it('grab moves a region with falloff', () => {
@@ -165,10 +167,90 @@ describe('sculpt brushes', () => {
     const s = new Sculptor(g);
     const c = center(tooth());
     s.beginGrab(c, { radius: 2, strength: 1 });
-    const moved = s.grabTo(new THREE.Vector3(1, 0, 0), 1);
+    expect(s.grabTo(new THREE.Vector3(1, 0, 0), 1)).toBeGreaterThan(0);
     s.endGrab();
-    expect(moved.length).toBeGreaterThan(0);
+    s.end();
     g.computeBoundingBox();
     expect(g.boundingBox!.max.x).toBeGreaterThan(c.x + 0.5);
+  });
+});
+
+/** Longest edge among triangles with a vertex near `c`. */
+function maxEdgeNear(g: THREE.BufferGeometry, c: THREE.Vector3, r: number): number {
+  const pos = g.getAttribute('position');
+  const idx = g.getIndex()!;
+  let max = 0;
+  const v = (i: number) => new THREE.Vector3().fromBufferAttribute(pos, i);
+  for (let t = 0; t < idx.count; t += 3) {
+    const tri = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)].map(v);
+    if (!tri.some((p) => p.distanceTo(c) < r)) continue;
+    for (let k = 0; k < 3; k++) max = Math.max(max, tri[k].distanceTo(tri[(k + 1) % 3]));
+  }
+  return max;
+}
+
+describe('dynamic remeshing', () => {
+  const remesh = { detail: 0.15, refine: true, reduce: true };
+  const spot = () => {
+    const g = tooth();
+    g.computeBoundingBox();
+    return new THREE.Vector3(g.boundingBox!.max.x, 0, 3);
+  };
+
+  it('adds detail under the brush and stays a closed manifold', () => {
+    const g = tooth();
+    const before = checkMesh(g).triangles;
+    const s = new Sculptor(g);
+    for (let i = 0; i < 8; i++) s.dab('draw', spot(), { radius: 1.5, strength: 0.8 }, remesh);
+    s.end();
+    const c = checkMesh(g);
+    expect(c.triangles).toBeGreaterThan(before);
+    expect(c.watertight).toBe(true);
+    expect(c.volume).toBeGreaterThan(0);
+    expect(maxEdgeNear(g, spot(), 0.8)).toBeLessThan(remesh.detail * 4 / 3 + 0.05);
+  });
+
+  it('keeps triangles even after a long grab', () => {
+    const g = tooth();
+    const s = new Sculptor(g);
+    const c = spot();
+    s.beginGrab(c, { radius: 2, strength: 1 }, remesh);
+    s.grabTo(new THREE.Vector3(3, 0, 0), 1); // pull 3 mm outward
+    const stretched = (() => {
+      s.end();
+      return maxEdgeNear(g, c.clone().add(new THREE.Vector3(1.5, 0, 0)), 1);
+    })();
+    s.endGrab(remesh);
+    s.end();
+    const after = maxEdgeNear(g, c.clone().add(new THREE.Vector3(1.5, 0, 0)), 1);
+    expect(after).toBeLessThan(stretched);
+    expect(after).toBeLessThan(remesh.detail * 4 / 3 + 0.1);
+    expect(checkMesh(g).watertight).toBe(true);
+  });
+
+  it('reduces detail when the target is coarser', () => {
+    const g = tooth();
+    const before = checkMesh(g).triangles;
+    const s = new Sculptor(g);
+    s.remeshAt(spot(), 3, { detail: 1.2, refine: false, reduce: true });
+    s.end();
+    const c = checkMesh(g);
+    expect(c.triangles).toBeLessThan(before);
+    expect(c.watertight).toBe(true);
+  });
+
+  it('survives many remeshed strokes without breaking the mesh', () => {
+    const g = tooth();
+    const s = new Sculptor(g);
+    const kinds = ['draw', 'remove', 'inflate', 'smooth', 'flatten'] as const;
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      const p = new THREE.Vector3(3.5 * Math.cos(a), 3.5 * Math.sin(a), 2 + (i % 5) * 0.8);
+      s.dab(kinds[i % kinds.length], p, { radius: 1.2, strength: 0.7 }, { detail: 0.12, refine: true, reduce: true });
+    }
+    s.end();
+    const c = checkMesh(g);
+    expect(c.watertight).toBe(true);
+    expect(c.volume).toBeGreaterThan(50);
   });
 });

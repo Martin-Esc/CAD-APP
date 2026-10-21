@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import type { AppContext, DesignModule } from './types';
 import type { PointerTool, SceneObject } from '../viewer/Viewport';
-import { BRUSH_LABELS, Sculptor, type BrushKind } from '../geometry/sculpt';
+import { BRUSH_LABELS, Sculptor, type BrushKind, type RemeshSettings } from '../geometry/sculpt';
+import { applySnapshot, snapshotOf } from '../geometry/dynamesh';
+
+type Snapshot = ReturnType<typeof snapshotOf>;
 import { fillHoles, fixNormals, inspect, planeCut, removeSmallShells, weldAndClean, type Inspection } from '../geometry/repair';
 import { button, checkboxField, el, note, numberField, section, selectField } from '../ui/dom';
 
@@ -16,7 +19,18 @@ const settings = {
   cutZ: 0,
   cutKeep: 'above' as 'above' | 'below',
   cutFill: true,
+  remesh: true,
+  detail: 0.15,
+  refine: true,
+  reduce: true,
+  wireframe: false,
 };
+
+/** Remesh settings for a dab, or null when dynamic remeshing is off (Refine always remeshes). */
+function remeshSettings(kind?: BrushKind): RemeshSettings | null {
+  if (!settings.remesh && kind !== 'refine') return null;
+  return { detail: settings.detail, refine: settings.refine, reduce: settings.reduce };
+}
 
 let sculptor: { geometry: THREE.BufferGeometry; s: Sculptor } | null = null;
 let refreshPanel: (() => void) | null = null;
@@ -77,14 +91,13 @@ function brushTool(ctx: AppContext): PointerTool {
   let stroke: {
     o: SceneObject;
     s: Sculptor;
-    before: Float32Array;
+    before: Snapshot;
     last: THREE.Vector3;
     kind: BrushKind;
     grabPlane?: THREE.Plane;
     grabStart?: THREE.Vector3;
   } | null = null;
   const ray = new THREE.Raycaster();
-  let lastRefit = 0;
 
   const pointerRay = (e: PointerEvent) => {
     const rect = ctx.viewport.renderer.domElement.getBoundingClientRect();
@@ -95,27 +108,48 @@ function brushTool(ctx: AppContext): PointerTool {
     return ray.ray;
   };
 
+  /** Ray hit on the stroke's mesh near the last dab (local mesh picking; the scene BVH is stale mid-stroke). */
+  const strokeHit = (e: PointerEvent): { point: THREE.Vector3; normal: THREE.Vector3 } | null => {
+    if (!stroke) return null;
+    const { o, s } = stroke;
+    const inv = o.mesh.matrixWorld.clone().invert();
+    const local = pointerRay(e).clone().applyMatrix4(inv);
+    const near = toLocal(o, stroke.last);
+    const r = localRadius(o) * 4;
+    const hit = s.mesh.raycastNear(local, near, r);
+    if (!hit) return null;
+    return {
+      point: hit.point.applyMatrix4(o.mesh.matrixWorld),
+      normal: hit.normal.transformDirection(o.mesh.matrixWorld),
+    };
+  };
+
   return {
+    wantsHitWhileDragging: () => false,
     down(hit, e) {
       const o = target(ctx);
       if (!hit || !o || hit.object.id !== o.id) return false;
+      const before = snapshotOf(o.mesh.geometry);
       const s = sculptorFor(ctx, o);
       if (!s) return false;
       const kind: BrushKind = e.shiftKey ? 'smooth' : settings.brush;
-      stroke = { o, s, before: s.positions.slice(), last: hit.point.clone(), kind };
+      stroke = { o, s, before, last: hit.point.clone(), kind };
+      // the picking BVH would be stale while the topology changes: drop it until the stroke ends
+      o.mesh.geometry.disposeBoundsTree?.();
+      s.begin();
       const brush = { radius: localRadius(o), strength: settings.strength };
       if (kind === 'grab') {
         const n = ctx.viewport.camera.getWorldDirection(new THREE.Vector3()).negate();
         stroke.grabPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, hit.point);
         stroke.grabStart = hit.point.clone();
-        s.beginGrab(toLocal(o, hit.point), brush);
+        s.beginGrab(toLocal(o, hit.point), brush, remeshSettings());
       } else {
-        s.dab(kind, toLocal(o, hit.point), brush);
-        s.commit();
+        s.dab(kind, toLocal(o, hit.point), brush, remeshSettings(kind));
       }
+      s.flush();
       return true;
     },
-    move(hit, e) {
+    move(_hit, e) {
       if (!stroke) return;
       const { o, s, kind } = stroke;
       if (kind === 'grab') {
@@ -123,47 +157,52 @@ function brushTool(ctx: AppContext): PointerTool {
         if (!p) return;
         const delta = toLocal(o, p).sub(toLocal(o, stroke.grabStart!));
         s.grabTo(delta, settings.strength);
-        s.commit();
+        s.flush();
         showCursor(ctx, { point: p, normal: stroke.grabPlane!.normal });
         return;
       }
-      showCursor(ctx, hit && hit.object.id === o.id ? hit : null);
-      if (!hit || hit.object.id !== o.id) return;
+      const hit = strokeHit(e);
+      showCursor(ctx, hit);
+      if (!hit) return;
       // dabs spaced at a quarter of the brush radius along the stroke
       const spacing = settings.radius * 0.25;
       const dist = hit.point.distanceTo(stroke.last);
       if (dist < spacing) return;
       const steps = Math.min(8, Math.floor(dist / spacing));
       const brush = { radius: localRadius(o), strength: settings.strength };
+      const remesh = remeshSettings(kind);
+      if (remesh && kind !== 'refine') s.remeshSegment(toLocal(o, stroke.last), toLocal(o, hit.point), brush, remesh);
       for (let i = 1; i <= steps; i++) {
         const p = stroke.last.clone().lerp(hit.point, i / steps);
-        s.dab(kind as Exclude<BrushKind, 'grab'>, toLocal(o, p), brush);
+        s.dab(kind as Exclude<BrushKind, 'grab'>, toLocal(o, p), brush, kind === 'refine' ? remesh : null);
       }
-      s.commit();
+      s.flush();
       stroke.last.copy(hit.point);
-      // keep picking accurate on the moving surface without refitting every event
-      const now = performance.now();
-      if (now - lastRefit > 80) {
-        lastRefit = now;
-        ctx.viewport.refreshBvh(o);
-      }
     },
     up() {
       if (!stroke) return;
       const { o, s, before, kind } = stroke;
-      if (kind === 'grab') s.endGrab();
+      if (kind === 'grab') s.endGrab(remeshSettings());
       stroke = null;
-      ctx.viewport.refreshBvh(o);
-      const after = s.positions.slice();
+      const after = s.end();
+      ctx.viewport.refreshBvh(o, true);
+      ctx.viewport.select(o.id); // refresh triangle count / watertight info
       const geometry = o.mesh.geometry;
-      const restore = (data: Float32Array) => {
+      const restore = (snap: Snapshot) => {
         if (o.mesh.geometry !== geometry) return;
-        (geometry.getAttribute('position').array as Float32Array).set(data);
-        geometry.getAttribute('position').needsUpdate = true;
-        geometry.computeVertexNormals();
-        ctx.viewport.refreshBvh(o);
+        applySnapshot(geometry, snap);
+        sculptor = null; // the dynamic mesh no longer matches
+        ctx.viewport.refreshBvh(o, true);
+        ctx.viewport.select(o.id);
       };
-      ctx.history.push({ label: `${BRUSH_LABELS[kind]} stroke`, undo: () => restore(before), redo: () => restore(after) });
+      const bytes = (x: Snapshot) => x.position.byteLength + x.normal.byteLength + x.index.byteLength;
+      ctx.history.push({
+        label: `${BRUSH_LABELS[kind]} stroke`,
+        bytes: bytes(before) + bytes(after),
+        undo: () => restore(before),
+        redo: () => restore(after),
+      });
+      refreshPanel?.();
     },
     hover(hit) {
       const o = target(ctx);
@@ -273,7 +312,20 @@ export const sculptModule: DesignModule = {
           el('div', { class: 'actions' }, ...brushButtons),
           numberField('Size (radius)', settings, 'radius', { min: 0.2, max: 15, step: 0.1, unit: 'mm' }),
           numberField('Strength', settings, 'strength', { min: 0.02, max: 1, step: 0.02 }),
-          note('Draw adds material, Remove takes it away, Inflate pushes along the surface normals, Flatten levels toward a plane, Grab drags a region. Large changes stretch triangles; there is no automatic remeshing yet.'),
+          note('Draw adds material, Remove takes it away, Inflate pushes along the surface normals, Flatten levels toward a plane, Grab drags a region, Refine only re-triangulates (no shape change).'),
+        ),
+        section(
+          'Dynamic remesh',
+          checkboxField('Remesh while sculpting', settings, 'remesh'),
+          numberField('Detail (edge length)', settings, 'detail', { min: 0.03, max: 2, step: 0.01, unit: 'mm' }),
+          checkboxField('Refine (add triangles)', settings, 'refine'),
+          checkboxField('Reduce (merge small triangles)', settings, 'reduce'),
+          checkboxField('Show triangles (wireframe)', settings, 'wireframe', () => {
+            const t = target(ctx);
+            if (t) (t.mesh.material as THREE.MeshStandardMaterial).wireframe = settings.wireframe;
+          }),
+          note('The surface under the brush is re-triangulated to the detail size as you sculpt, so large Draw / Grab edits stay smooth instead of stretching. Smaller detail = finer surface but more triangles (the detail is limited to brush size / 25).'),
+          o && sculptor?.geometry === o.mesh.geometry ? note(`${sculptor.s.triangleCount.toLocaleString()} triangles`) : null,
         ),
         section(
           'Inspector & repair',
