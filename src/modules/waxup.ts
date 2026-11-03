@@ -1,6 +1,6 @@
 import type { AppContext, DesignModule } from './types';
 import { MATERIALS } from '../viewer/Viewport';
-import { getTooth, jawOf } from '../core/teeth';
+import { jawOf, toothLabel } from '../core/teeth';
 import { placeTeeth } from '../core/arch';
 import { teethWithRole } from '../core/case';
 import { mergeParts, prepareTeeth, solidParts } from '../library/provider';
@@ -19,7 +19,7 @@ async function generate(ctx: AppContext): Promise<void> {
   }
   for (const fdi of teeth) {
     const placement = placeTeeth(ctx.arch(jawOf(fdi))).get(fdi)!;
-    viewport.add(`Wax-up ${ctx.state.numbering === 'fdi' ? fdi : '#' + getTooth(fdi).universal}`, mergeParts(solidParts(fdi, state.params.waxupScale, 0)).toGeometry(), MATERIALS.waxup(), {
+    viewport.add(`Wax-up ${toothLabel(fdi, ctx.state.numbering)}`, mergeParts(solidParts(fdi, state.params.waxupScale, 0)).toGeometry(), MATERIALS.waxup(), {
       category: 'design',
       module: MODULE,
       matrix: placement.matrix,

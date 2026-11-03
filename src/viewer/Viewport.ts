@@ -101,7 +101,7 @@ export class Viewport {
     this.scene.background = new THREE.Color(0x1d2330);
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.5, 2000);
     this.camera.up.set(0, 0, 1);
-    this.camera.position.set(0, -120, 70);
+    this.camera.position.set(0, 120, 70); // in front of the patient (+y is anterior)
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.localClippingEnabled = true;
@@ -447,18 +447,20 @@ export class Viewport {
     const radius = box.getSize(new THREE.Vector3()).length() / 2;
     const dist = radius / Math.sin(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 1.05;
     const dirs: Record<string, THREE.Vector3> = {
-      front: new THREE.Vector3(0, -1, 0.15),
-      'occlusal-lower': new THREE.Vector3(0, -0.05, 1),
-      'occlusal-upper': new THREE.Vector3(0, -0.05, -1),
-      left: new THREE.Vector3(1, 0, 0.1),
-      right: new THREE.Vector3(-1, 0, 0.1),
+      // world: +x patient's right, +y anterior, +z toward the head
+      front: new THREE.Vector3(0, 1, 0.15),
+      'occlusal-lower': new THREE.Vector3(0, 0.05, 1),
+      'occlusal-upper': new THREE.Vector3(0, 0.05, -1),
+      left: new THREE.Vector3(-1, 0, 0.1), // the patient's left side
+      right: new THREE.Vector3(1, 0, 0.1),
     };
     const dir = (dirs[preset] ?? this.camera.position.clone().sub(this.controls.target)).normalize();
     this.controls.target.copy(center);
     this.camera.position.copy(center).addScaledVector(dir, dist);
     this.camera.up.set(0, 0, 1);
-    if (preset === 'occlusal-lower') this.camera.up.set(0, 1, 0);
-    if (preset === 'occlusal-upper') this.camera.up.set(0, -1, 0);
+    // as seen by a clinician facing the patient: the patient's right on the left of the screen
+    if (preset === 'occlusal-lower') this.camera.up.set(0, -1, 0);
+    if (preset === 'occlusal-upper') this.camera.up.set(0, 1, 0);
     this.camera.lookAt(center);
   }
 }

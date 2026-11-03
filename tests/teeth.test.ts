@@ -48,3 +48,28 @@ describe('arch helpers', () => {
     expect(contiguousRuns([14, 15, 16, 21, 36, 37])).toEqual([[16, 15, 14], [21], [36, 37]]);
   });
 });
+
+describe('numbering systems', () => {
+  it('labels the same teeth in every system', async () => {
+    const { toothLabel } = await import('../src/core/teeth');
+    const cases: [number, Record<string, string>][] = [
+      [11, { fdi: '11', universal: '8', palmer: '1┘', haderup: '1+', alphanumeric: 'UR1' }],
+      [21, { fdi: '21', universal: '9', palmer: '└1', haderup: '+1', alphanumeric: 'UL1' }],
+      [36, { fdi: '36', universal: '19', palmer: '┌6', haderup: '−6', alphanumeric: 'LL6' }],
+      [48, { fdi: '48', universal: '32', palmer: '8┐', haderup: '8−', alphanumeric: 'LR8' }],
+    ];
+    for (const [fdi, labels] of cases) {
+      for (const [system, expected] of Object.entries(labels)) {
+        expect(toothLabel(fdi, system as 'fdi')).toBe(expected);
+      }
+    }
+  });
+
+  it('gives 32 distinct labels per system', async () => {
+    const { toothLabel, archOrder, NUMBERING_LABELS } = await import('../src/core/teeth');
+    const all = [...archOrder('upper'), ...archOrder('lower')];
+    for (const system of Object.keys(NUMBERING_LABELS)) {
+      expect(new Set(all.map((f) => toothLabel(f, system as 'fdi'))).size).toBe(32);
+    }
+  });
+});

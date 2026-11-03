@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { AppContext, DesignModule } from './types';
 import type { SceneObject } from '../viewer/Viewport';
 import { MATERIALS } from '../viewer/Viewport';
-import { contiguousRuns, getTooth, jawOf, type Jaw } from '../core/teeth';
+import { contiguousRuns, getTooth, jawOf, toothLabel, type Jaw } from '../core/teeth';
 import { placeTeeth } from '../core/arch';
 import { teethWithRole } from '../core/case';
 import { buildCrownShell, buildCrownCavity, buildPrepStump, prepRings, shapeFromTooth, ToothSurface } from '../geometry/toothShape';
@@ -33,7 +33,7 @@ export function validateSpan(span: number[], roles: Record<number, string>): str
 }
 
 function label(ctx: AppContext, fdi: number): string {
-  return ctx.state.numbering === 'fdi' ? String(fdi) : `#${getTooth(fdi).universal}`;
+  return toothLabel(fdi, ctx.state.numbering);
 }
 
 function moduleObjects(ctx: AppContext, kind?: string): SceneObject[] {

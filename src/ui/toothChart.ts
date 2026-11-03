@@ -1,5 +1,5 @@
 import { el } from './dom';
-import { getTooth } from '../core/teeth';
+import { getTooth, toothLabel, NUMBERING_LABELS, type Numbering } from '../core/teeth';
 import { ROLE_LABELS, type CaseState, type UnitRole } from '../core/case';
 
 type Brush = UnitRole | 'clear';
@@ -12,7 +12,7 @@ const LOWER = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
  * click teeth to assign it. Shown from the clinician's view (patient's right
  * on the left of the screen).
  */
-export function toothChart(state: CaseState, onChange: () => void): HTMLElement {
+export function toothChart(state: CaseState, onChange: () => void, onNumberingChange: () => void = () => {}): HTMLElement {
   let brush: Brush = 'crown';
   const root = el('div', { class: 'tooth-chart' });
 
@@ -46,7 +46,7 @@ export function toothChart(state: CaseState, onChange: () => void): HTMLElement 
         ...teeth.map((fdi) => {
           const role = state.roles[fdi];
           const info = getTooth(fdi);
-          const labelText = state.numbering === 'fdi' ? String(fdi) : String(info.universal);
+          const labelText = toothLabel(fdi, state.numbering);
           return el(
             'button',
             {
@@ -69,7 +69,17 @@ export function toothChart(state: CaseState, onChange: () => void): HTMLElement 
 
   renderBrushes();
   renderRows();
+  const numbering = el('select', { title: 'Tooth numbering system' });
+  for (const [value, text] of Object.entries(NUMBERING_LABELS)) {
+    numbering.append(el('option', { value, selected: value === state.numbering }, text));
+  }
+  numbering.addEventListener('change', () => {
+    state.numbering = numbering.value as Numbering;
+    renderRows();
+    onNumberingChange();
+  });
   root.append(
+    el('label', { class: 'numbering' }, el('span', {}, 'Numbering'), numbering),
     el('div', { class: 'chart-head' }, el('span', {}, 'Patient right'), el('span', {}, 'Patient left')),
     rows,
     brushes,

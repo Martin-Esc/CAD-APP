@@ -4,7 +4,9 @@ import { archOrder, getTooth, type Jaw } from './teeth';
 /**
  * Dental arch model.
  *
- * World frame (Z-up):  +x patient's left, +y anterior, +z up.
+ * World frame (Z-up, right-handed and anatomically correct):
+ *   +x patient's right, +y anterior, +z toward the head.
+ * (A patient facing +y with the head toward +z has the right hand at +x.)
  * The lower arch's margins sit on z = 0 with crowns pointing +z; the upper
  * arch's margins sit on z = UPPER_MARGIN_Z with crowns pointing -z, so the
  * two dentitions meet around the occlusal plane.
@@ -51,7 +53,7 @@ export function defaultArch(jaw: Jaw): ArchDefinition {
   const n = 11;
   for (let i = 0; i < n; i++) {
     const s = (i / (n - 1)) * 2 - 1; // -1 (right) .. 1 (left)
-    const x = width * Math.sin((s * Math.PI) / 2.15);
+    const x = -width * Math.sin((s * Math.PI) / 2.15); // patient's right is +x
     const y = depth * (1 - Math.pow(Math.abs(s), 1.7)) - depth * 0.55;
     base.push(new THREE.Vector3(x, y, 0));
   }
@@ -68,8 +70,15 @@ export function defaultArch(jaw: Jaw): ArchDefinition {
   };
 }
 
+/**
+ * The arch curve, always running from the patient's right (+x) to the left
+ * (-x), whatever order the points were stored in (older case files kept
+ * them the other way round).
+ */
 export function archCurve(arch: ArchDefinition): THREE.CatmullRomCurve3 {
-  return new THREE.CatmullRomCurve3(arch.points, false, 'centripetal');
+  const pts = arch.points;
+  const ordered = pts.length > 1 && pts[0].x < pts[pts.length - 1].x ? [...pts].reverse() : pts;
+  return new THREE.CatmullRomCurve3(ordered, false, 'centripetal');
 }
 
 /** Arc-length parameter (0..1) of the arch midline (x = 0 crossing). */
@@ -78,7 +87,8 @@ function midlineU(curve: THREE.CatmullRomCurve3): number {
   let hi = 1;
   for (let i = 0; i < 40; i++) {
     const mid = (lo + hi) / 2;
-    if (curve.getPointAt(mid).x < 0) lo = mid;
+    // x decreases along the curve (right +x -> left -x)
+    if (curve.getPointAt(mid).x > 0) lo = mid;
     else hi = mid;
   }
   return (lo + hi) / 2;
@@ -132,7 +142,8 @@ export function placeTeeth(arch: ArchDefinition, widthScale = 1): Map<number, To
 export function archFromPicks(jaw: Jaw, picks: THREE.Vector3[], occlusalDir: 1 | -1, crownHeight = 8): ArchDefinition {
   if (picks.length < 3) throw new Error('Pick at least 3 points along the arch');
   const sorted = [...picks];
-  if (sorted[0].x > sorted[sorted.length - 1].x) sorted.reverse();
+  // store from the patient's right (+x) to the left
+  if (sorted[0].x < sorted[sorted.length - 1].x) sorted.reverse();
   const z = sorted.reduce((s, p) => s + p.z, 0) / sorted.length;
   return {
     jaw,

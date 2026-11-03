@@ -185,3 +185,45 @@ export function contiguousRuns(teeth: number[]): number[][] {
   }
   return runs;
 }
+
+/**
+ * Tooth numbering systems in current use for the permanent dentition:
+ *
+ *  - FDI / ISO 3950: two digits, quadrant 1–4 (UR, UL, LL, LR) + tooth 1–8 ("11")
+ *  - Universal (ADA): 1–32, from the upper right third molar around to the lower right ("8")
+ *  - Palmer (Zsigmondy–Palmer): tooth 1–8 in a quadrant bracket ("1┘" = upper right central)
+ *  - Haderup: + upper / − lower, sign after the number on the right, before it on the left ("1+")
+ *  - Alphanumeric: quadrant letters + tooth 1–8 ("UR1"), common in the UK and in lab software
+ */
+export type Numbering = 'fdi' | 'universal' | 'palmer' | 'haderup' | 'alphanumeric';
+
+export const NUMBERING_LABELS: Record<Numbering, string> = {
+  fdi: 'FDI / ISO 3950 (11–48)',
+  universal: 'Universal / ADA (1–32)',
+  palmer: 'Palmer / Zsigmondy (1┘)',
+  haderup: 'Haderup (1+, −1)',
+  alphanumeric: 'Alphanumeric (UR1)',
+};
+
+export function isNumbering(v: unknown): v is Numbering {
+  return typeof v === 'string' && v in NUMBERING_LABELS;
+}
+
+/** Label of a tooth (given by its FDI number) in the chosen numbering system. */
+export function toothLabel(fdi: number, system: Numbering): string {
+  const q = quadrantOf(fdi);
+  const p = fdi % 10;
+  switch (system) {
+    case 'universal':
+      return String(fdiToUniversal(fdi));
+    case 'palmer':
+      // the bracket is the quadrant seen from the clinician facing the patient
+      return [`${p}┘`, `└${p}`, `┌${p}`, `${p}┐`][q - 1];
+    case 'haderup':
+      return [`${p}+`, `+${p}`, `−${p}`, `${p}−`][q - 1];
+    case 'alphanumeric':
+      return `${['UR', 'UL', 'LL', 'LR'][q - 1]}${p}`;
+    default:
+      return String(fdi);
+  }
+}

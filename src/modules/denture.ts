@@ -1,7 +1,7 @@
 import type { AppContext, DesignModule } from './types';
 import type { SceneObject } from '../viewer/Viewport';
 import { MATERIALS } from '../viewer/Viewport';
-import { archOrder, type Jaw } from '../core/teeth';
+import { archOrder, toothLabel, type Jaw } from '../core/teeth';
 import { prepareTeeth, solidTooth } from '../library/provider';
 import { MeshBuilder } from '../geometry/MeshBuilder';
 import { worldGeometry } from '../geometry/csg';
@@ -73,7 +73,7 @@ async function generate(ctx: AppContext, issuesBox: HTMLElement): Promise<void> 
       data: { kind: 'base', jaw, parts },
     });
     for (const t of buildDentureTeeth(arch, p, (f) => solids.get(f)!.clone())) {
-      viewport.add(`Denture tooth ${t.fdi}`, t.mesh.toGeometry(), MATERIALS.tooth(), {
+      viewport.add(`Denture tooth ${toothLabel(t.fdi, ctx.state.numbering)}`, t.mesh.toGeometry(), MATERIALS.tooth(), {
         category: 'design',
         module: MODULE,
         matrix: t.matrix,
