@@ -186,7 +186,7 @@ class App {
   private renderAll(): void {
     // a new or opened case may choose a different tooth library
     this.applyLibrary();
-    this.chartHost.replaceChildren(toothChart(this.state, () => {}));
+    this.chartHost.replaceChildren(toothChart(this.state, () => {}, () => this.renderTabs()));
     this.renderTabs();
   }
 

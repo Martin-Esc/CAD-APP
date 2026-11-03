@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Jaw } from './teeth';
+import { isNumbering, type Jaw, type Numbering } from './teeth';
 import type { ArchDefinition } from './arch';
 import { DEFAULT_PREP, type PrepParams } from '../geometry/toothShape';
 import { DEFAULT_CONNECTOR, type ConnectorParams } from '../geometry/connector';
@@ -31,7 +31,7 @@ export interface CaseInfo {
 
 export interface CaseState {
   info: CaseInfo;
-  numbering: 'fdi' | 'universal';
+  numbering: Numbering;
   roles: Record<number, UnitRole>;
   /** arches fitted to scans (falls back to the default arch form) */
   arches: Partial<Record<Jaw, ArchDefinition>>;
@@ -119,7 +119,7 @@ export function deserializeCase(json: string): CaseState {
   }
   return {
     info: { ...base.info, ...raw.info },
-    numbering: raw.numbering ?? base.numbering,
+    numbering: isNumbering(raw.numbering) ? raw.numbering : base.numbering,
     // drop roles from older versions (e.g. 'abutment') that this build doesn't support
     roles: Object.fromEntries(Object.entries(raw.roles ?? {}).filter(([, r]) => (r as string) in ROLE_LABELS)) as Record<number, UnitRole>,
     arches,

@@ -99,7 +99,7 @@ src/
   ui/          DOM helpers, tooth chart, object list
 ```
 
-Conventions: units are millimetres and the world is **Z-up**, with +Y anterior and +X the patient's left. Each tooth has a local frame: +x mesiodistal, +y buccal, +z occlusal, with the margin at z = 0. Every generator returns closed, consistently wound meshes. The tests enforce this, because a mesh with holes cannot be milled or printed.
+Conventions: units are millimetres and the world is **Z-up**, with +Y anterior, +Z toward the head and +X the patient's right (right-handed, anatomically correct: a patient facing +Y with the head toward +Z has the right hand at +X). Each tooth has a local frame: +x = buccal × occlusal (mesiodistal), +y buccal, +z occlusal, with the margin at z = 0. Every generator returns closed, consistently wound meshes. The tests enforce this, because a mesh with holes cannot be milled or printed.
 
 ## Roadmap
 

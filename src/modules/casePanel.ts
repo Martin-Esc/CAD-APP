@@ -138,7 +138,7 @@ export const casePanel: DesignModule = {
           button('Demo models', () => void loadDemoModels(ctx), 'primary'),
           button('Unlock / lock scans', toggleScanEditing),
         ),
-        note('STL, PLY or OBJ in millimetres. Align the occlusal plane with the grid (Z up, incisors toward +Y) so the arch tools and the nightguard work as expected.'),
+        note('STL, PLY or OBJ in millimetres. Align the occlusal plane with the grid (Z up, incisors toward +Y, patient’s right toward +X) so the arch tools and the nightguard work as expected. Check with the Front view: the patient’s right side should appear on the left of the screen.'),
       ),
       section(
         'Arch',
