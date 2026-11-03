@@ -6,13 +6,27 @@ Browser-based CAD for the dental lab: **crowns & bridges, complete dentures (one
 
 > ⚠️ **Not a medical device.** This is an early-stage design tool. Anything it makes must be checked by a qualified dental professional before clinical use. Software that designs patient-specific restorations is a regulated medical device in most markets (FDA Class II in the US, EU MDR).
 
-## Quick start
+## Use it in a browser
+
+The app runs entirely in the browser: nothing is installed and no data leaves the computer (scans are opened locally). It needs a current Chrome, Edge, Firefox or Safari with WebGL 2.
+
+- **Online:** https://martin-esc.github.io/CAD-APP/ (published automatically by GitHub Actions on every push; see below)
+- **Your own server:** run `npm ci && npx vite build` and copy the `dist/` folder to any static web host (lab intranet server, Netlify, S3, nginx…). It works from any folder or sub-path. It has to be served over http(s); opening `index.html` straight from disk does not work, because browsers block module scripts and file loading on `file://`.
+
+### Publishing on GitHub Pages (one-time setup)
+
+1. Repository **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+2. Push to `main` (or the development branch): the *Deploy web app* workflow typechecks, runs the tests, builds and publishes.
+3. If the deployment step reports that the branch is not allowed, open **Settings → Environments → github-pages** and add the branch under *Deployment branches*, or merge into `main`.
+
+## Development
 
 ```bash
 npm install
 npm run dev        # http://localhost:5173
 npm test           # geometry, boolean, margin and numbering tests
-npm run build      # production build in dist/
+npm run build      # typecheck + production build in dist/
+npm run preview    # serve the production build locally
 ```
 
 When the app opens it builds procedural **demo models**, so every workflow works without scan data. Import your own STL/PLY/OBJ scans from the **Case** tab.

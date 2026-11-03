@@ -302,4 +302,23 @@ class App {
   }
 }
 
-new App(document.getElementById('app')!);
+/** The 3D viewer needs WebGL 2 (all current Chrome, Edge, Firefox and Safari versions). */
+function webglAvailable(): boolean {
+  try {
+    return !!document.createElement('canvas').getContext('webgl2');
+  } catch {
+    return false;
+  }
+}
+
+const appRoot = document.getElementById('app')!;
+if (webglAvailable()) {
+  new App(appRoot);
+} else {
+  appRoot.innerHTML = `
+    <div class="unsupported">
+      <h1>Dental CAD needs WebGL 2</h1>
+      <p>This browser or computer cannot show the 3D viewer. Use a current version of Chrome, Edge, Firefox or Safari,
+      and make sure hardware acceleration is turned on (Chrome / Edge: Settings → System → "Use graphics acceleration when available").</p>
+    </div>`;
+}
