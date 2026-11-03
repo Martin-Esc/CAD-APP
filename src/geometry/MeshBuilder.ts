@@ -202,32 +202,52 @@ export function checkMesh(geometry: THREE.BufferGeometry): MeshCheck {
   const index = geometry.getIndex();
   const pos = geometry.getAttribute('position');
   if (!index) throw new Error('checkMesh requires an indexed geometry');
-  const edges = new Map<string, number>();
-  let volume = 0;
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
-  for (let i = 0; i < index.count; i += 3) {
-    const tri = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+  const count = geometry.drawRange.count === Infinity ? index.count : Math.min(index.count, geometry.drawRange.count);
+  const idx = index.array as ArrayLike<number>;
+  const p = pos.array as ArrayLike<number>;
+  // Count each undirected edge by bucketing it under its smaller vertex
+  // (no hashing: hash maps made this take seconds on full-arch scans).
+  const nv = pos.count;
+  const start = new Int32Array(nv + 1);
+  for (let i = 0; i < count; i += 3) {
     for (let k = 0; k < 3; k++) {
-      const u = tri[k];
-      const v = tri[(k + 1) % 3];
-      const key = u < v ? `${u}_${v}` : `${v}_${u}`;
-      edges.set(key, (edges.get(key) ?? 0) + 1);
+      const u = idx[i + k], v = idx[i + ((k + 1) % 3)];
+      start[(u < v ? u : v) + 1]++;
     }
-    a.fromBufferAttribute(pos, tri[0]);
-    b.fromBufferAttribute(pos, tri[1]);
-    c.fromBufferAttribute(pos, tri[2]);
-    volume += a.dot(b.clone().cross(c)) / 6;
+  }
+  for (let v = 0; v < nv; v++) start[v + 1] += start[v];
+  const fill = start.slice(0, nv);
+  const other = new Int32Array(count);
+  let volume = 0;
+  for (let i = 0; i < count; i += 3) {
+    const t0 = idx[i], t1 = idx[i + 1], t2 = idx[i + 2];
+    for (let k = 0; k < 3; k++) {
+      const u = idx[i + k], v = idx[i + ((k + 1) % 3)];
+      if (u < v) other[fill[u]++] = v;
+      else other[fill[v]++] = u;
+    }
+    const ax = p[t0 * 3], ay = p[t0 * 3 + 1], az = p[t0 * 3 + 2];
+    const bx = p[t1 * 3], by = p[t1 * 3 + 1], bz = p[t1 * 3 + 2];
+    const cx = p[t2 * 3], cy = p[t2 * 3 + 1], cz = p[t2 * 3 + 2];
+    volume += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6;
   }
   let boundaryEdges = 0;
   let nonManifoldEdges = 0;
-  for (const count of edges.values()) {
-    if (count === 1) boundaryEdges++;
-    else if (count > 2) nonManifoldEdges++;
+  for (let v = 0; v < nv; v++) {
+    const a = start[v], b = start[v + 1];
+    if (b - a > 1) other.subarray(a, b).sort();
+    let run = 1;
+    for (let j = a + 1; j <= b; j++) {
+      if (j < b && other[j] === other[j - 1]) run++;
+      else {
+        if (run === 1) boundaryEdges++;
+        else if (run > 2) nonManifoldEdges++;
+        run = 1;
+      }
+    }
   }
   return {
-    triangles: index.count / 3,
+    triangles: count / 3,
     boundaryEdges,
     nonManifoldEdges,
     watertight: boundaryEdges === 0 && nonManifoldEdges === 0,

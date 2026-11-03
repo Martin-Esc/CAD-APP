@@ -254,3 +254,17 @@ describe('dynamic remeshing', () => {
     expect(c.volume).toBeGreaterThan(50);
   });
 });
+
+describe('brush falloff', () => {
+  it('shapes the brush profile', async () => {
+    const { falloff } = await import('../src/geometry/sculpt');
+    // all profiles: full at the centre, zero at the rim
+    for (const f of ['smooth', 'sharp', 'flat'] as const) {
+      expect(falloff(0, 2, f)).toBeCloseTo(1);
+      expect(falloff(2, 2, f)).toBe(0);
+    }
+    // flat keeps full strength over the inner area; sharp drops fastest
+    expect(falloff(1, 2, 'flat')).toBe(1);
+    expect(falloff(1, 2, 'sharp')).toBeLessThan(falloff(1, 2, 'smooth'));
+  });
+});

@@ -309,6 +309,25 @@ export class Viewport {
     this.emit();
   }
 
+  /** Remove an object from the scene but keep its mesh, so it can be restored (undoable delete). */
+  takeOut(id: string): SceneObject | undefined {
+    const o = this.objects.get(id);
+    if (!o) return undefined;
+    if (this.selectedId === id) this.select(null);
+    this.scene.remove(o.mesh);
+    this.objects.delete(id);
+    this.emit();
+    return o;
+  }
+
+  /** Put back an object removed with takeOut. */
+  putBack(o: SceneObject): void {
+    if (this.objects.has(o.id)) return;
+    this.scene.add(o.mesh);
+    this.objects.set(o.id, o);
+    this.emit();
+  }
+
   removeWhere(pred: (o: SceneObject) => boolean): void {
     for (const o of [...this.objects.values()]) if (pred(o)) this.remove(o.id);
   }

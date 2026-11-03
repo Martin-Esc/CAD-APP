@@ -42,8 +42,26 @@ export function exportStl(meshes: THREE.Mesh[]): Blob {
   const group = new THREE.Group();
   for (const m of meshes) {
     m.updateMatrixWorld(true);
-    const clone = new THREE.Mesh(m.geometry.clone().applyMatrix4(m.matrixWorld));
-    group.add(clone);
+    const g = m.geometry.clone().applyMatrix4(m.matrixWorld);
+    // a mirroring transform turns the triangles inside out: restore outward winding
+    if (m.matrixWorld.determinant() < 0) {
+      if (g.index) {
+        const idx = g.index;
+        for (let i = 0; i < idx.count; i += 3) {
+          const b = idx.getX(i + 1);
+          idx.setX(i + 1, idx.getX(i + 2));
+          idx.setX(i + 2, b);
+        }
+      } else {
+        const pos = g.getAttribute('position');
+        for (let i = 0; i < pos.count; i += 3) {
+          const x = pos.getX(i + 1), y = pos.getY(i + 1), z = pos.getZ(i + 1);
+          pos.setXYZ(i + 1, pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
+          pos.setXYZ(i + 2, x, y, z);
+        }
+      }
+    }
+    group.add(new THREE.Mesh(g));
   }
   const data = new STLExporter().parse(group, { binary: true }) as DataView;
   return new Blob([data.buffer as ArrayBuffer], { type: 'model/stl' });

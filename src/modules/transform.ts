@@ -148,12 +148,15 @@ export const transformModule: DesignModule = {
           e[(['x', 'y', 'z'] as const)[axis]] = rad(v);
           return m.compose(p, q.setFromEuler(e), s);
         });
-      const setScale = (v: number) =>
+      const setScale = (raw: number) => {
+        // zero or negative scale would collapse or mirror the model (inside-out exports)
+        const v = THREE.MathUtils.clamp(raw, 0.05, 20);
         change(ctx, o, 'Scale', (m) => {
           const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
           m.decompose(p, q, s);
           return m.compose(p, q, new THREE.Vector3(v, v, v));
         });
+      };
 
       const move = (axis: number, sign: number) =>
         change(ctx, o, 'Move', (m) => {

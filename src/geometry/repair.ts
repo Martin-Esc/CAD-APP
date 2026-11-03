@@ -46,15 +46,20 @@ function write(m: Mesh): THREE.BufferGeometry {
   return g;
 }
 
+/** Numeric edge keys (much faster than string keys on scans with 100k+ triangles). Valid below 67M vertices. */
+const K = 67108864;
+const edgeKey = (a: number, b: number) => (a < b ? a * K + b : b * K + a);
+const dirKey = (a: number, b: number) => a * K + b;
+
 const V = (m: Mesh, i: number) => new THREE.Vector3(m.p[i * 3], m.p[i * 3 + 1], m.p[i * 3 + 2]);
 
 /** Directed boundary edges (a → b as used by their single face), chained into loops. */
 function boundaryLoopsOf(m: Mesh): number[][] {
-  const count = new Map<string, number>();
+  const count = new Map<number, number>();
   for (let t = 0; t < m.f.length; t += 3) {
     for (let k = 0; k < 3; k++) {
       const a = m.f[t + k], b = m.f[t + ((k + 1) % 3)];
-      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      const key = edgeKey(a, b);
       count.set(key, (count.get(key) ?? 0) + 1);
     }
   }
@@ -62,24 +67,24 @@ function boundaryLoopsOf(m: Mesh): number[][] {
   for (let t = 0; t < m.f.length; t += 3) {
     for (let k = 0; k < 3; k++) {
       const a = m.f[t + k], b = m.f[t + ((k + 1) % 3)];
-      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      const key = edgeKey(a, b);
       if (count.get(key) === 1) (next.get(a) ?? next.set(a, []).get(a)!).push(b);
     }
   }
   const loops: number[][] = [];
-  const usedEdge = new Set<string>();
+  const usedEdge = new Set<number>();
   for (const [start, outs] of next) {
     for (const first of outs) {
-      if (usedEdge.has(`${start}>${first}`)) continue;
+      if (usedEdge.has(dirKey(start, first))) continue;
       const loop = [start];
-      usedEdge.add(`${start}>${first}`);
+      usedEdge.add(dirKey(start, first));
       let cur = first;
       let guard = 0;
       while (cur !== start && guard++ < 1e6) {
         loop.push(cur);
-        const cands = (next.get(cur) ?? []).filter((n) => !usedEdge.has(`${cur}>${n}`));
+        const cands = (next.get(cur) ?? []).filter((n) => !usedEdge.has(dirKey(cur, n)));
         if (!cands.length) break;
-        usedEdge.add(`${cur}>${cands[0]}`);
+        usedEdge.add(dirKey(cur, cands[0]));
         cur = cands[0];
       }
       if (cur === start && loop.length >= 3) loops.push(loop);
@@ -99,11 +104,11 @@ function shellsOf(m: Mesh): number[][] {
     }
     return i;
   };
-  const edgeFace = new Map<string, number>();
+  const edgeFace = new Map<number, number>();
   for (let t = 0; t < nf; t++) {
     for (let k = 0; k < 3; k++) {
       const a = m.f[t * 3 + k], b = m.f[t * 3 + ((k + 1) % 3)];
-      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      const key = edgeKey(a, b);
       const other = edgeFace.get(key);
       if (other === undefined) edgeFace.set(key, t);
       else parent[find(t)] = find(other);
@@ -132,14 +137,17 @@ export interface Inspection {
 export function inspect(g: THREE.BufferGeometry): Inspection {
   const m = read(g);
   const loops = boundaryLoopsOf(m);
-  const count = new Map<string, number>();
+  const count = new Map<number, number>();
   let degenerate = 0;
+  const P = m.p;
   for (let t = 0; t < m.f.length; t += 3) {
-    const [a, b, c] = [m.f[t], m.f[t + 1], m.f[t + 2]];
-    const area = V(m, b).sub(V(m, a)).cross(V(m, c).sub(V(m, a))).length() / 2;
-    if (a === b || b === c || a === c || area < 1e-10) degenerate++;
+    const a = m.f[t], b = m.f[t + 1], c = m.f[t + 2];
+    const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+    const vx = P[c * 3] - P[a * 3], vy = P[c * 3 + 1] - P[a * 3 + 1], vz = P[c * 3 + 2] - P[a * 3 + 2];
+    const area2 = (uy * vz - uz * vy) ** 2 + (uz * vx - ux * vz) ** 2 + (ux * vy - uy * vx) ** 2;
+    if (a === b || b === c || a === c || area2 < 4e-20) degenerate++;
     for (const [u, v] of [[a, b], [b, c], [c, a]]) {
-      const key = u < v ? `${u}_${v}` : `${v}_${u}`;
+      const key = edgeKey(u, v);
       count.set(key, (count.get(key) ?? 0) + 1);
     }
   }
@@ -257,7 +265,7 @@ export function weldAndClean(g: THREE.BufferGeometry, tolerance = 1e-4): { geome
   for (const name of Object.keys(src.attributes)) if (name !== 'position') src.deleteAttribute(name);
   const welded = mergeVertices(src.index ? src.toNonIndexed() : src, tolerance);
   const m = read(welded);
-  const seen = new Set<string>();
+  const seen = new Set<string>(); // sorted triple – only built for this cleanup pass
   const f: number[] = [];
   let removed = 0;
   for (let t = 0; t < m.f.length; t += 3) {
@@ -282,11 +290,11 @@ export function weldAndClean(g: THREE.BufferGeometry, tolerance = 1e-4): { geome
 export function fixNormals(g: THREE.BufferGeometry): { geometry: THREE.BufferGeometry; flipped: number } {
   const m = read(g);
   const nf = m.f.length / 3;
-  const edgeFaces = new Map<string, number[]>();
+  const edgeFaces = new Map<number, number[]>();
   for (let t = 0; t < nf; t++) {
     for (let k = 0; k < 3; k++) {
       const a = m.f[t * 3 + k], b = m.f[t * 3 + ((k + 1) % 3)];
-      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      const key = edgeKey(a, b);
       (edgeFaces.get(key) ?? edgeFaces.set(key, []).get(key)!).push(t);
     }
   }
@@ -312,7 +320,7 @@ export function fixNormals(g: THREE.BufferGeometry): { geometry: THREE.BufferGeo
       shell.push(t);
       for (let k = 0; k < 3; k++) {
         const a = m.f[t * 3 + k], b = m.f[t * 3 + ((k + 1) % 3)];
-        const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+        const key = edgeKey(a, b);
         const faces = edgeFaces.get(key)!;
         if (faces.length !== 2) continue; // boundary or non-manifold: don't propagate across
         const o = faces[0] === t ? faces[1] : faces[0];
@@ -334,7 +342,7 @@ export function fixNormals(g: THREE.BufferGeometry): { geometry: THREE.BufferGeo
     }
     const closed = shell.every((t) => [0, 1, 2].every((k) => {
       const a = m.f[t * 3 + k], b = m.f[t * 3 + ((k + 1) % 3)];
-      return edgeFaces.get(a < b ? `${a}_${b}` : `${b}_${a}`)!.length === 2;
+      return edgeFaces.get(edgeKey(a, b))!.length === 2;
     }));
     const flipAll = closed ? vol < 0 : flippedHere.length > shell.length / 2;
     if (flipAll) {
@@ -354,9 +362,9 @@ export function fixNormals(g: THREE.BufferGeometry): { geometry: THREE.BufferGeo
 export function planeCut(g: THREE.BufferGeometry, plane: THREE.Plane, fill = true): THREE.BufferGeometry {
   const m = read(g);
   const d = Array.from({ length: m.p.length / 3 }, (_, i) => plane.distanceToPoint(V(m, i)));
-  const edgeVertex = new Map<string, number>();
+  const edgeVertex = new Map<number, number>();
   const cutVertex = (a: number, b: number) => {
-    const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+    const key = edgeKey(a, b);
     let id = edgeVertex.get(key);
     if (id === undefined) {
       const t = d[a] / (d[a] - d[b]);

@@ -114,7 +114,8 @@ async function exportBase(ctx: AppContext): Promise<void> {
   ctx.exportGeometries(objects(ctx, 'base').map((o) => worldGeometry(o.mesh)), 'denture-base-socketed');
 }
 
-let socketTimer: ReturnType<typeof setTimeout> | undefined;
+/** per jaw, so moving a tooth in one jaw never cancels the pending re-cut of the other */
+const socketTimers: Partial<Record<Jaw, ReturnType<typeof setTimeout>>> = {};
 
 export const dentureModule: DesignModule = {
   id: MODULE,
@@ -183,7 +184,7 @@ export const dentureModule: DesignModule = {
     const base = objects(ctx, 'base', jaw)[0];
     if (base) base.data.socketed = false;
     // re-cut once the user stops dragging
-    clearTimeout(socketTimer);
-    socketTimer = setTimeout(() => void cutSockets(ctx, jaw), 500);
+    clearTimeout(socketTimers[jaw]);
+    socketTimers[jaw] = setTimeout(() => void cutSockets(ctx, jaw), 500);
   },
 };

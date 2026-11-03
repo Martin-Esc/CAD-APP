@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { AppContext, DesignModule } from './types';
 import type { PointerTool, SceneObject } from '../viewer/Viewport';
-import { BRUSH_LABELS, Sculptor, type BrushKind, type RemeshSettings } from '../geometry/sculpt';
+import { BRUSH_LABELS, Sculptor, type BrushKind, type Falloff, type RemeshSettings } from '../geometry/sculpt';
 import { applySnapshot, snapshotOf } from '../geometry/dynamesh';
 
 type Snapshot = ReturnType<typeof snapshotOf>;
@@ -24,7 +24,15 @@ const settings = {
   refine: true,
   reduce: true,
   wireframe: false,
+  falloff: 'smooth' as Falloff,
+  /** mirror brush dabs across the patient's midline (world X = 0) */
+  symmetry: false,
 };
+
+/** The dab position mirrored across the midline plane (world X = 0), in the object's local space. */
+function mirrored(o: SceneObject, world: THREE.Vector3): THREE.Vector3 {
+  return toLocal(o, new THREE.Vector3(-world.x, world.y, world.z));
+}
 
 /** Remesh settings for a dab, or null when dynamic remeshing is off (Refine always remeshes). */
 function remeshSettings(kind?: BrushKind): RemeshSettings | null {
@@ -137,7 +145,7 @@ function brushTool(ctx: AppContext): PointerTool {
       // the picking BVH would be stale while the topology changes: drop it until the stroke ends
       o.mesh.geometry.disposeBoundsTree?.();
       s.begin();
-      const brush = { radius: localRadius(o), strength: settings.strength };
+      const brush = { radius: localRadius(o), strength: settings.strength, falloff: settings.falloff };
       if (kind === 'grab') {
         const n = ctx.viewport.camera.getWorldDirection(new THREE.Vector3()).negate();
         stroke.grabPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, hit.point);
@@ -145,6 +153,7 @@ function brushTool(ctx: AppContext): PointerTool {
         s.beginGrab(toLocal(o, hit.point), brush, remeshSettings());
       } else {
         s.dab(kind, toLocal(o, hit.point), brush, remeshSettings(kind));
+        if (settings.symmetry) s.dab(kind, mirrored(o, hit.point), brush, remeshSettings(kind));
       }
       s.flush();
       return true;
@@ -169,12 +178,16 @@ function brushTool(ctx: AppContext): PointerTool {
       const dist = hit.point.distanceTo(stroke.last);
       if (dist < spacing) return;
       const steps = Math.min(8, Math.floor(dist / spacing));
-      const brush = { radius: localRadius(o), strength: settings.strength };
+      const brush = { radius: localRadius(o), strength: settings.strength, falloff: settings.falloff };
       const remesh = remeshSettings(kind);
-      if (remesh && kind !== 'refine') s.remeshSegment(toLocal(o, stroke.last), toLocal(o, hit.point), brush, remesh);
+      if (remesh && kind !== 'refine') {
+        s.remeshSegment(toLocal(o, stroke.last), toLocal(o, hit.point), brush, remesh);
+        if (settings.symmetry) s.remeshSegment(mirrored(o, stroke.last), mirrored(o, hit.point), brush, remesh);
+      }
       for (let i = 1; i <= steps; i++) {
         const p = stroke.last.clone().lerp(hit.point, i / steps);
         s.dab(kind as Exclude<BrushKind, 'grab'>, toLocal(o, p), brush, kind === 'refine' ? remesh : null);
+        if (settings.symmetry) s.dab(kind as Exclude<BrushKind, 'grab'>, mirrored(o, p), brush, kind === 'refine' ? remesh : null);
       }
       s.flush();
       stroke.last.copy(hit.point);
@@ -312,6 +325,8 @@ export const sculptModule: DesignModule = {
           el('div', { class: 'actions' }, ...brushButtons),
           numberField('Size (radius)', settings, 'radius', { min: 0.2, max: 15, step: 0.1, unit: 'mm' }),
           numberField('Strength', settings, 'strength', { min: 0.02, max: 1, step: 0.02 }),
+          selectField('Falloff', settings, 'falloff', [['smooth', 'Smooth (dome)'], ['sharp', 'Sharp (pointed)'], ['flat', 'Flat (plateau)']]),
+          checkboxField('Symmetry (mirror across midline X = 0)', settings, 'symmetry'),
           note('Draw adds material, Remove takes it away, Inflate pushes along the surface normals, Flatten levels toward a plane, Grab drags a region, Refine only re-triangulates (no shape change).'),
         ),
         section(
@@ -332,6 +347,29 @@ export const sculptModule: DesignModule = {
           el(
             'div',
             { class: 'actions' },
+            button('Auto repair', need((t) => {
+              const steps: string[] = [];
+              let g = t.mesh.geometry;
+              const weld = weldAndClean(g);
+              g = weld.geometry;
+              if (weld.removed) steps.push(`${weld.removed} bad triangle(s) removed`);
+              const shells = removeSmallShells(g, settings.minShell / 100);
+              g = shells.geometry;
+              if (shells.removed) steps.push(`${shells.removed} loose piece(s) removed`);
+              const normals = fixNormals(g);
+              g = normals.geometry;
+              if (normals.flipped) steps.push(`${normals.flipped} triangle(s) flipped`);
+              const holes = fillHoles(g, settings.maxHole);
+              g = holes.geometry;
+              if (holes.filled) steps.push(`${holes.filled} hole(s) filled`);
+              replaceGeometry(ctx, t, g, 'Auto repair');
+              clearMarkers(ctx);
+              const r = inspect(g);
+              ctx.status(
+                `Auto repair: ${steps.length ? steps.join(', ') : 'nothing to fix'}.` +
+                  (r.holes.length ? ` ${r.holes.length} larger hole(s) left (above ${settings.maxHole} mm) – raise the limit to fill them.` : ''),
+              );
+            }), 'primary'),
             button('Inspect', need((t) => {
               const r = inspect(t.mesh.geometry);
               showHoles(ctx, t, r);
@@ -343,7 +381,7 @@ export const sculptModule: DesignModule = {
                   r.watertight && r.shells === 1 ? 'info' : 'warn',
                 ),
               );
-            }), 'primary'),
+            })),
             button('Clear markers', () => {
               clearMarkers(ctx);
               report.replaceChildren();

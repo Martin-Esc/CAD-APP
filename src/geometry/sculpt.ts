@@ -24,11 +24,15 @@ export const BRUSH_LABELS: Record<BrushKind, string> = {
   refine: 'Refine',
 };
 
+export type Falloff = 'smooth' | 'sharp' | 'flat';
+
 export interface BrushSettings {
   /** brush radius (mm) */
   radius: number;
   /** 0 … 1 */
   strength: number;
+  /** brush profile (Meshmixer's falloff curve): smooth dome, sharp point, flat plateau */
+  falloff?: Falloff;
 }
 
 export interface RemeshSettings {
@@ -45,10 +49,19 @@ interface Selection {
   weights: number[];
 }
 
-/** Smooth falloff: 1 at the centre, 0 at the rim, flat derivative at both ends. */
-function falloff(d: number, r: number): number {
-  const x = 1 - (d * d) / (r * r);
-  return x <= 0 ? 0 : x * x;
+/** Brush falloff: 1 at the centre, 0 at the rim. */
+export function falloff(d: number, r: number, shape: Falloff = 'smooth'): number {
+  const t = d / r;
+  if (t >= 1) return 0;
+  if (shape === 'sharp') return (1 - t) ** 3; // pointed: strong centre, quick decay
+  if (shape === 'flat') {
+    // plateau over the inner 60 %, smooth edge
+    if (t <= 0.6) return 1;
+    const x = (t - 0.6) / 0.4;
+    return 1 - x * x * (3 - 2 * x);
+  }
+  const x = 1 - t * t;
+  return x * x;
 }
 
 export class Sculptor {
@@ -72,10 +85,10 @@ export class Sculptor {
     return this.mesh.fCount;
   }
 
-  select(center: THREE.Vector3, radius: number): Selection {
+  select(center: THREE.Vector3, radius: number, shape: Falloff = 'smooth'): Selection {
     const ids = this.mesh.within(center, radius);
     const p = this.mesh.pos;
-    const weights = ids.map((v) => falloff(Math.hypot(p[v * 3] - center.x, p[v * 3 + 1] - center.y, p[v * 3 + 2] - center.z), radius));
+    const weights = ids.map((v) => falloff(Math.hypot(p[v * 3] - center.x, p[v * 3 + 1] - center.y, p[v * 3 + 2] - center.z), radius, shape));
     return { ids, weights };
   }
 
@@ -116,7 +129,7 @@ export class Sculptor {
       return 1;
     }
     if (remesh) this.mesh.remesh(center, brush.radius * 1.15, this.detailFor(brush, remesh), { ...remesh, passes: 1 });
-    const sel = this.select(center, brush.radius);
+    const sel = this.select(center, brush.radius, brush.falloff);
     if (!sel.ids.length) return 0;
     const p = this.mesh.pos;
     const nrm = this.mesh.nrm;
@@ -195,7 +208,7 @@ export class Sculptor {
   /** Start a Grab stroke: remembers the region and its original positions. */
   beginGrab(center: THREE.Vector3, brush: BrushSettings, remesh?: RemeshSettings | null): void {
     if (remesh) this.mesh.remesh(center, brush.radius * 1.15, this.detailFor(brush, remesh), { ...remesh, passes: 1 });
-    const sel = this.select(center, brush.radius);
+    const sel = this.select(center, brush.radius, brush.falloff);
     const origin = new Float32Array(sel.ids.length * 3);
     sel.ids.forEach((v, k) => origin.set(this.mesh.pos.subarray(v * 3, v * 3 + 3), k * 3));
     this.grab = { sel, origin, center: center.clone(), radius: brush.radius, delta: new THREE.Vector3() };

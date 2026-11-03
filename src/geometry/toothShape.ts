@@ -40,8 +40,14 @@ export interface PrepParams {
   taper: number;
   /** cement spacer (mm) */
   cementGap: number;
-  /** height from the margin over which no cement gap is applied (mm) */
+  /** distance from the margin line where the cement gap starts (mm) */
   marginSeal: number;
+  /** length over which the gap ramps up to full size after `marginSeal` (mm) */
+  gapTransition: number;
+  /** extra uniform spacing on top of the cement gap, e.g. milling compensation (mm) */
+  extraSpacing: number;
+  /** fill undercuts of the die along the insertion axis so the crown can seat */
+  blockOut: boolean;
 }
 
 export const DEFAULT_PREP: PrepParams = {
@@ -51,6 +57,9 @@ export const DEFAULT_PREP: PrepParams = {
   taper: 12,
   cementGap: 0.05,
   marginSeal: 1.0,
+  gapTransition: 0.5,
+  extraSpacing: 0,
+  blockOut: true,
 };
 
 export function shapeFromTooth(info: ToothInfo, scale = 1): ToothShape {
@@ -428,7 +437,7 @@ function addDome(mb: MeshBuilder, marginIds: number[], margin: THREE.Vector3[], 
 export function buildCrownCavity(shape: ToothShape, prep: PrepParams = DEFAULT_PREP, below = 3): MeshBuilder {
   const surface = new ToothSurface(shape);
   const mb = new MeshBuilder();
-  const p = prepRings(surface, prep, prep.cementGap);
+  const p = prepRings(surface, prep, prep.cementGap + (prep.extraSpacing ?? 0));
   const ids = p.rings.map((r) => mb.addRing(r));
   for (let k = 0; k < ids.length - 1; k++) mb.stitchRings(ids[k], ids[k + 1]);
   mb.fan(mb.addPoint(p.center), ids[ids.length - 1]);
@@ -445,7 +454,7 @@ export function buildCrownShell(shape: ToothShape, prep: PrepParams = DEFAULT_PR
   const surface = new ToothSurface(shape);
   const mb = new MeshBuilder();
   const outer = surface.outerRings();
-  const inner = prepRings(surface, prep, prep.cementGap);
+  const inner = prepRings(surface, prep, prep.cementGap + (prep.extraSpacing ?? 0));
   const outerMargin = addOuter(mb, outer.rings, outer.center);
   const innerMargin = addInner(mb, inner.rings, inner.center);
   // margin band (faces -z)

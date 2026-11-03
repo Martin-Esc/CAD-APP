@@ -66,6 +66,8 @@ export const nightguardModule: DesignModule = {
         'Quality',
         numberField('Resolution', p, 'resolution', { min: 0.15, max: 1, step: 0.05, unit: 'mm', onChange: regen }),
         numberField('Outline smoothing', p, 'outlineSmoothing', { min: 0, max: 20, step: 1, onChange: regen }),
+        numberField('Top smoothing (anatomic)', p, 'topSmoothing', { min: 0.5, max: 8, step: 0.5, unit: 'mm', onChange: regen }),
+        numberField('Fitting-surface smoothing', p, 'bottomSmoothing', { min: 0, max: 3, step: 0.1, unit: 'mm', onChange: regen }),
       ),
       info,
       el(

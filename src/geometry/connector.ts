@@ -2,15 +2,17 @@ import * as THREE from 'three';
 import { MeshBuilder } from './MeshBuilder';
 
 export interface ConnectorParams {
-  /** cross-sectional area in mm² (e.g. ≥ 9 mm² posterior zirconia, ≥ 16 mm² for long spans) */
+  /** posterior connector cross-section in mm² (e.g. ≥ 12 mm² zirconia, ≥ 16 mm² for long spans) */
   area: number;
+  /** anterior (canine to canine) connector cross-section in mm² (e.g. ≥ 9 mm² zirconia) */
+  areaAnterior: number;
   /** height / width ratio of the elliptical section (connectors are taller than wide) */
   aspect: number;
   /** relative height of the connector above the margin (0 = margin, 1 = cusp tip) */
   heightRatio: number;
 }
 
-export const DEFAULT_CONNECTOR: ConnectorParams = { area: 9, aspect: 1.3, heightRatio: 0.55 };
+export const DEFAULT_CONNECTOR: ConnectorParams = { area: 12, areaAnterior: 9, aspect: 1.3, heightRatio: 0.55 };
 
 /**
  * Elliptical connector between two bridge units, built in world space from

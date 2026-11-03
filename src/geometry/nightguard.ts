@@ -33,6 +33,10 @@ export interface NightguardParams {
   surface: 'flat' | 'anatomic';
   /** smoothing passes for the outline */
   outlineSmoothing: number;
+  /** smoothing of the anatomic occlusal surface (mm, like exocad's top smoothing) */
+  topSmoothing: number;
+  /** smoothing of the fitting surface (mm): fills fissures / small grooves, never moves toward the teeth */
+  bottomSmoothing: number;
 }
 
 export const DEFAULT_NIGHTGUARD: NightguardParams = {
@@ -43,6 +47,8 @@ export const DEFAULT_NIGHTGUARD: NightguardParams = {
   resolution: 0.4,
   surface: 'flat',
   outlineSmoothing: 4,
+  topSmoothing: 3,
+  bottomSmoothing: 0.5,
 };
 
 interface Grid {
@@ -213,8 +219,14 @@ export function buildNightguard(
   let region = dilate(teeth, nx, ny, params.wallThickness / res);
   region = erode(dilate(region, nx, ny, 2), nx, ny, 2); // closing: smooth small notches
 
-  const qIn = new Float32Array(nx * ny);
+  let qIn = new Float32Array(nx * ny);
   for (let k = 0; k < q.length; k++) qIn[k] = Math.max(Number.isFinite(q[k]) ? q[k] : qCut, qCut) + params.gap;
+  const bottomPasses = Math.round(((params.bottomSmoothing ?? 0) / res) ** 2);
+  if (bottomPasses > 0) {
+    // smoothing may only lift the fitting surface away from the teeth (fills fissures)
+    const smooth = blur(qIn, region, nx, ny, bottomPasses);
+    qIn = qIn.map((v, k) => Math.max(v, smooth[k]));
+  }
 
   let qOut: Float32Array;
   if (params.surface === 'flat') {
@@ -222,7 +234,9 @@ export function buildNightguard(
     for (let k = 0; k < q.length; k++) if (region[k] && qIn[k] > top) top = qIn[k];
     qOut = new Float32Array(nx * ny).fill(top + params.thickness);
   } else {
-    const smooth = blur(qIn, region, nx, ny, Math.round(3 / res));
+    // a box blur repeated n times spreads over ≈ √n cells: passes for the requested radius
+    const passes = Math.max(1, Math.round(((params.topSmoothing ?? 3) / res) ** 2 / 2));
+    const smooth = blur(qIn, region, nx, ny, Math.min(400, passes));
     qOut = new Float32Array(nx * ny);
     for (let k = 0; k < q.length; k++) qOut[k] = Math.max(smooth[k], qIn[k]) + params.thickness;
   }

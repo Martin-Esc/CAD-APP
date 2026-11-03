@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 import { MeshBuilder } from './MeshBuilder';
 import { ToothSurface, type OuterSurface, type PrepParams, type ToothShape } from './toothShape';
 import { extractRegion, resampleByAngle, MARGIN_SAMPLES } from './margin';
@@ -7,9 +8,11 @@ import { extractRegion, resampleByAngle, MARGIN_SAMPLES } from './margin';
  * Crown fitted to a scanned die.
  *
  *  - Intaglio: the die surface inside the margin line, sampled by ray casting
- *    from a point inside the die, then offset along the surface normal by the
- *    cement gap. The gap is zero over the marginal seal zone and ramps up over
- *    0.5 mm beyond it.
+ *    from a point inside the die. Undercuts along the insertion axis are
+ *    blocked out (the die may not widen toward occlusal), then the surface is
+ *    offset along its normal by cement gap + extra spacing. As in exocad's
+ *    cement gap dialog, the gap starts a set distance from the margin line
+ *    and ramps up over a transition length.
  *  - Outer surface: the library tooth, scaled to the margin size and warped so
  *    that its cervical ring lands exactly on the margin line. The warp fades
  *    out by 45 % of the wall height.
@@ -29,6 +32,12 @@ export interface DieCrownResult {
   height: number;
   /** thinnest wall found outside the margin zone (mm) */
   minThickness: number;
+  /** deepest undercut that was blocked out (mm, 0 = none) */
+  blockedOut: number;
+  /** number of vertices of the outer surface (they come first in `mesh`, margin ring included) */
+  outerVertexCount: number;
+  /** vertex count of the margin ring (the first vertices of `mesh`) */
+  marginVertexCount: number;
 }
 
 const INTAGLIO_RINGS = 16;
@@ -103,7 +112,12 @@ export function buildDieCrown(
   const pole = cast(O, Z) ?? top0;
 
   // ---- intaglio ---------------------------------------------------------
-  const gapAt = (s: number) => prep.cementGap * smoothstep(prep.marginSeal, prep.marginSeal + 0.5, s);
+  const transition = prep.gapTransition ?? 0.5;
+  const fullGap = prep.cementGap + (prep.extraSpacing ?? 0);
+  const gapAt = (s: number) => fullGap * smoothstep(prep.marginSeal, prep.marginSeal + transition, s);
+  const blockOut = prep.blockOut ?? true;
+  const radiusLimit = m.map((p) => Math.hypot(p.x, p.y));
+  let blockedOut = 0;
   const intaglio: THREE.Vector3[][] = [];
   const cavityRings: THREE.Vector3[][] = [];
   const arc = m.map(() => 0);
@@ -118,7 +132,19 @@ export function buildDieCrown(
       const dir = Z.clone().multiplyScalar(Math.cos(theta)).addScaledVector(horizontal, Math.sin(theta));
       const hit = cast(O, dir);
       const p = hit ? hit.point.clone() : O.clone().addScaledVector(dir, prevRing[j].distanceTo(O));
-      const normal = hit ? hit.normal : dir;
+      let normal = hit ? hit.normal : dir;
+      if (blockOut) {
+        // seen along the insertion axis (+z) the die may not get wider going up
+        const r = Math.hypot(p.x, p.y);
+        if (r > radiusLimit[j] + 1e-6 && p.z >= prevRing[j].z - 1e-6) {
+          blockedOut = Math.max(blockedOut, r - radiusLimit[j]);
+          p.x *= radiusLimit[j] / r;
+          p.y *= radiusLimit[j] / r;
+          normal = new THREE.Vector3(p.x, p.y, 0).normalize(); // blocked wall is vertical
+        } else {
+          radiusLimit[j] = Math.min(radiusLimit[j], r);
+        }
+      }
       arc[j] += p.distanceTo(prevRing[j]);
       const g = gapAt(arc[j]);
       ring.push(p.clone().addScaledVector(normal, g));
@@ -174,12 +200,43 @@ export function buildDieCrown(
     const fromMargin = mj ? p.distanceTo(mj) : Infinity;
     const zone = Math.min(1, fromMargin / 1.2);
     const need = (prep.axialThickness * (1 - occlusal) + prep.occlusalThickness * occlusal) * zone;
-    const required = hit.distance + prep.cementGap + need;
+    const required = hit.distance + fullGap + need;
     if (dist < required) p.copy(O).addScaledVector(dir, required);
-    if (zone >= 1) minThickness = Math.min(minThickness, Math.max(dist, required) - hit.distance - prep.cementGap);
   };
   outer.forEach((ring, k) => ring.forEach((p, j) => enforce(p, k < WALL_RINGS ? m[j] : null)));
   enforce(outerCenter, null);
+
+  // Second pass: wall thickness is the distance to the nearest point of the
+  // actual intaglio (gap and block-out included), measured perpendicular to the
+  // surface. The ray pass above can leave sloped walls too thin.
+  const innerMb = new MeshBuilder();
+  let innerPrev = innerMb.addRing(m);
+  for (const ring of intaglio) {
+    const ids = innerMb.addRing(ring);
+    innerMb.stitchRings(ids, innerPrev);
+    innerPrev = ids;
+  }
+  innerMb.fan(innerMb.addPoint(poleIn), innerPrev, true);
+  const innerBvh = new MeshBVH(innerMb.toGeometry());
+  const closest = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
+  const enforceNormal = (p: THREE.Vector3, mj: THREE.Vector3 | null, record: boolean) => {
+    if (!innerBvh.closestPointToPoint(p, closest)) return;
+    const dir = p.clone().sub(closest.point);
+    const dist = dir.length();
+    if (dist < 1e-9) return;
+    dir.divideScalar(dist);
+    const occlusal = smoothstep(0.3, 0.8, dir.z);
+    const fromMargin = mj ? p.distanceTo(mj) : Infinity;
+    const zone = Math.min(1, fromMargin / 1.2);
+    const need = (prep.axialThickness * (1 - occlusal) + prep.occlusalThickness * occlusal) * zone;
+    if (dist < need) p.copy(closest.point).addScaledVector(dir, need);
+    if (record && zone >= 1) minThickness = Math.min(minThickness, Math.max(dist, need));
+  };
+  for (let pass = 0; pass < 3; pass++) {
+    const last = pass === 2;
+    outer.forEach((ring, k) => ring.forEach((p, j) => enforceNormal(p, k < WALL_RINGS ? m[j] : null, last)));
+    enforceNormal(outerCenter, null, last);
+  }
 
   // ---- assemble -----------------------------------------------------------
   const mb = new MeshBuilder();
@@ -226,5 +283,28 @@ export function buildDieCrown(
     frame,
     height: surface.height,
     minThickness: Number.isFinite(minThickness) ? minThickness : 0,
+    blockedOut,
+    outerVertexCount: N * (1 + outer.length) + 1,
+    marginVertexCount: N,
   };
+}
+
+/**
+ * How freely each crown vertex may be moved by contact adaptation: 0 for the
+ * margin, the cervical third of the wall and the intaglio; ramping to 1 on
+ * the upper wall (proximal contacts) and the occlusal table.
+ */
+export function adaptWeights(r: DieCrownResult): Float32Array {
+  const w = new Float32Array(r.mesh.vertexCount);
+  const N = r.marginVertexCount;
+  for (let i = N; i < r.outerVertexCount; i++) {
+    const ring = Math.floor((i - N) / N);
+    if (ring < WALL_RINGS) {
+      const t = (ring + 1) / WALL_RINGS;
+      w[i] = smoothstep(0.3, 0.6, t);
+    } else {
+      w[i] = 1;
+    }
+  }
+  return w;
 }

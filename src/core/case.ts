@@ -5,6 +5,9 @@ import { DEFAULT_PREP, type PrepParams } from '../geometry/toothShape';
 import { DEFAULT_CONNECTOR, type ConnectorParams } from '../geometry/connector';
 import { DEFAULT_DENTURE, type DentureParams } from '../geometry/denture';
 import { DEFAULT_NIGHTGUARD, type NightguardParams } from '../geometry/nightguard';
+import { materialById } from './materials';
+
+const ZIRCONIA = materialById('zirconia')!;
 
 /** What is planned for a tooth position. */
 export type UnitRole = 'crown' | 'pontic' | 'waxup' | 'missing';
@@ -34,7 +37,13 @@ export interface CaseState {
   arches: Partial<Record<Jaw, ArchDefinition>>;
   /** margin lines on scanned preps, world coordinates, per FDI tooth */
   margins: Record<number, [number, number, number][]>;
+  /** insertion axis per prepared tooth (unit vector, world), when not the occlusal direction */
+  axes: Record<number, [number, number, number]>;
   params: {
+    /** restoration material preset id (see core/materials.ts) */
+    material: string;
+    /** occlusal / proximal contact control for crowns */
+    contacts: { adapt: boolean; occlusal: number; proximal: number; ponticPressure: number };
     /** build crowns on the scanned die when a margin line exists */
     fitToDie: boolean;
     /** tooth shapes: the scanned library (when available) or procedural teeth */
@@ -63,11 +72,14 @@ export function newCase(): CaseState {
     roles: {},
     arches: {},
     margins: {},
+    axes: {},
     params: {
+      material: 'zirconia',
+      contacts: { adapt: true, occlusal: 0.05, proximal: 0.03, ponticPressure: 0.3 },
       fitToDie: true,
       toothLibrary: 'scanned',
-      prep: { ...DEFAULT_PREP },
-      connector: { ...DEFAULT_CONNECTOR },
+      prep: { ...DEFAULT_PREP, ...ZIRCONIA.prep },
+      connector: { ...DEFAULT_CONNECTOR, area: ZIRCONIA.connector.posterior, areaAnterior: ZIRCONIA.connector.anterior },
       anatomyScale: 1,
       denture: { ...DEFAULT_DENTURE, jaw: 'both' },
       nightguard: { ...DEFAULT_NIGHTGUARD, jaw: 'upper' },
@@ -112,7 +124,10 @@ export function deserializeCase(json: string): CaseState {
     roles: Object.fromEntries(Object.entries(raw.roles ?? {}).filter(([, r]) => (r as string) in ROLE_LABELS)) as Record<number, UnitRole>,
     arches,
     margins: raw.margins ?? {},
+    axes: raw.axes ?? {},
     params: {
+      material: raw.params?.material ?? base.params.material,
+      contacts: { ...base.params.contacts, ...raw.params?.contacts },
       fitToDie: raw.params?.fitToDie ?? true,
       toothLibrary: raw.params?.toothLibrary === 'procedural' ? 'procedural' : 'scanned',
       prep: { ...base.params.prep, ...raw.params?.prep },

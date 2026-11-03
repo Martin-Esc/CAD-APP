@@ -1,8 +1,8 @@
 import { el } from './dom';
-import type { Viewport } from '../viewer/Viewport';
+import type { SceneObject, Viewport } from '../viewer/Viewport';
 
 /** Object browser: visibility, opacity, selection and deletion. */
-export function sceneList(viewport: Viewport): HTMLElement {
+export function sceneList(viewport: Viewport, onDelete: (o: SceneObject) => void = (o) => viewport.remove(o.id)): HTMLElement {
   const root = el('div', { class: 'scene-list' });
   const render = () => {
     const objects = viewport.list().filter((o) => o.category !== 'helper' || o.data.arch);
@@ -26,7 +26,7 @@ export function sceneList(viewport: Viewport): HTMLElement {
             name.addEventListener('click', () => {
               if (o.editable || viewport.selectionMode === 'any') viewport.select(o.id);
             });
-            const del = el('button', { type: 'button', class: 'icon', title: 'Delete', onclick: () => viewport.remove(o.id) }, '×');
+            const del = el('button', { type: 'button', class: 'icon', title: 'Delete', onclick: () => onDelete(o) }, '×');
             return el('div', { class: `item ${viewport.selected?.id === o.id ? 'selected' : ''}` }, vis, name, opacity, del);
           }),
         ),

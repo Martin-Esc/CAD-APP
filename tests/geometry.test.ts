@@ -4,7 +4,7 @@ import { checkMesh } from '../src/geometry/MeshBuilder';
 import { buildCrownShell, buildSolidTooth, buildPrepStump, shapeFromTooth, DEFAULT_PREP } from '../src/geometry/toothShape';
 import { buildConnector } from '../src/geometry/connector';
 import { buildDentureBase, buildDentureTeeth, buildDemoModel } from '../src/geometry/denture';
-import { buildNightguard } from '../src/geometry/nightguard';
+import { buildNightguard, DEFAULT_NIGHTGUARD } from '../src/geometry/nightguard';
 import { defaultArch, placeTeeth } from '../src/core/arch';
 import { getTooth, archOrder } from '../src/core/teeth';
 
@@ -96,6 +96,7 @@ describe('nightguard', () => {
     const arch = defaultArch(jaw);
     const scan = buildDemoModel(arch).toGeometry();
     const result = buildNightguard(scan, arch.occlusalDir, {
+      ...DEFAULT_NIGHTGUARD,
       thickness: 2,
       gap: 0.1,
       coverDepth: 4,
@@ -113,5 +114,15 @@ describe('nightguard', () => {
     const scanBox = scan.boundingBox!;
     if (jaw === 'lower') expect(g.boundingBox!.max.z).toBeGreaterThan(scanBox.max.z);
     else expect(g.boundingBox!.min.z).toBeLessThan(scanBox.min.z);
+  });
+});
+
+describe('nightguard surfaces', () => {
+  it('anatomic splint with fitting-surface smoothing keeps the minimum thickness and stays closed', () => {
+    const arch = defaultArch('lower');
+    const scan = buildDemoModel(arch).toGeometry();
+    const r = buildNightguard(scan, arch.occlusalDir, { ...DEFAULT_NIGHTGUARD, surface: 'anatomic', resolution: 0.6, topSmoothing: 4, bottomSmoothing: 1 });
+    expect(r.minThickness).toBeGreaterThanOrEqual(DEFAULT_NIGHTGUARD.thickness - 0.01);
+    expect(checkMesh(r.mesh.toGeometry()).watertight).toBe(true);
   });
 });

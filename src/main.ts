@@ -49,7 +49,7 @@ class App {
       this.statusBar,
     );
     this.viewport = new Viewport(viewportHost);
-    root.querySelector('aside.objects')!.append(sceneList(this.viewport));
+    root.querySelector('aside.objects')!.append(sceneList(this.viewport, (o) => this.deleteObject(o)));
 
     const self = this;
     this.ctx = {
@@ -120,6 +120,21 @@ class App {
     this.applyLibrary();
     this.renderTabs();
     await loadDemoModels(this.ctx);
+  }
+
+  /** Delete with undo (Ctrl+Z brings the object back). */
+  private deleteObject(o: SceneObject): void {
+    if (o.category === 'helper') {
+      this.viewport.remove(o.id);
+      return;
+    }
+    if (!this.viewport.takeOut(o.id)) return;
+    this.history.push({
+      label: `Delete ${o.name}`,
+      undo: () => this.viewport.putBack(o),
+      redo: () => void this.viewport.takeOut(o.id),
+    });
+    this.status(`Deleted ${o.name} (Ctrl+Z to undo).`);
   }
 
   private buildHeader(): HTMLElement {
@@ -251,7 +266,7 @@ class App {
         case 'delete':
         case 'backspace': {
           const sel = this.viewport.selected;
-          if (sel) this.viewport.remove(sel.id);
+          if (sel) this.deleteObject(sel);
           break;
         }
       }
@@ -264,6 +279,7 @@ class App {
     try {
       this.state = deserializeCase(await file.text());
       this.viewport.removeWhere((o) => o.category !== 'scan');
+      this.history.clear(); // old undo steps refer to objects of the previous case
       this.renderAll();
       this.status(`Opened ${this.state.info.caseId}. Re-import scans and press Generate in each module.`);
     } catch (e) {
